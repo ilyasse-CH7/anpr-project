@@ -1,0 +1,7 @@
+"""Module placeholder."""
+\n# Local env file (secrets)
+.env
+
+# Trained OCR weights are produced locally or by CI; keep the reproducible
+# extraction/training code and source crops under version control instead.
+models/*.pt
