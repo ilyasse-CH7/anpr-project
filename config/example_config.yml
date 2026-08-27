@@ -1,0 +1,11 @@
+# Example YAML configuration (alternative to .env)
+camera:
+  rtsp_url: "${CAMERA_RTSP_URL}"
+  ip: "${CAMERA_IP}"
+  user: "${RTSP_USER}"
+  password: "${RTSP_PASS}"
+server:
+  url: "${SERVER_URL}"
+  jwt_secret: "${JWT_SECRET}"
+database:
+  url: "${DATABASE_URL}"
