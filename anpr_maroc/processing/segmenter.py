@@ -270,14 +270,16 @@ def _choose_separators(gray: np.ndarray, debug_dir: t.Optional[str] = None) -> t
                 pass
 
         if len(bars_sorted) >= 2:
-            # Prefer pair that best matches the expected 1/3 and 2/3 plate layout.
+            # Moroccan one-line plates reserve roughly half of the width for
+            # the series, then the Arabic letter and region.  The supplied
+            # formats place their bars near 50% and 70%, not at equal thirds.
             candidates = []
             for i in range(len(bars_sorted) - 1):
                 for j in range(i + 1, len(bars_sorted)):
                     p1, p2 = bars_sorted[i], bars_sorted[j]
                     if abs(p2 - p1) < min_sep:
                         continue
-                    score = abs(p1 - 0.33 * w) + abs(p2 - 0.67 * w)
+                    score = abs(p1 - 0.50 * w) + abs(p2 - 0.70 * w)
                     candidates.append((score, [p1, p2]))
             if candidates:
                 best_pair = sorted(candidates, key=lambda x: x[0])[0][1]
@@ -290,6 +292,26 @@ def _choose_separators(gray: np.ndarray, debug_dir: t.Optional[str] = None) -> t
                     f.write(f"picked_bars_raw={bars_sorted[:2]}\n")
             return bars_sorted[:2]
     elif len(bars) == 1:
+        # A separator may be slightly shorter than the frame because of a
+        # perspective crop (notably ``8.jpg``).  Relax the height threshold
+        # only here: the already-confirmed full-height bar anchors the pair,
+        # while the usual 80% threshold remains strict for normal detection.
+        relaxed_bars = _detect_vertical_bars(gray, min_height_ratio=0.75)
+        relaxed_bars = sorted({x for x in relaxed_bars if 0.15 * w < x < 0.85 * w})
+        if len(relaxed_bars) >= 2:
+            candidates = []
+            for i in range(len(relaxed_bars) - 1):
+                for j in range(i + 1, len(relaxed_bars)):
+                    p1, p2 = relaxed_bars[i], relaxed_bars[j]
+                    if abs(p2 - p1) >= min_sep:
+                        score = abs(p1 - 0.50 * w) + abs(p2 - 0.70 * w)
+                        candidates.append((score, [p1, p2]))
+            if candidates:
+                best_pair = min(candidates, key=lambda candidate: candidate[0])[1]
+                if debug_dir:
+                    with open(os.path.join(debug_dir, "detection_debug.txt"), "a", encoding="utf-8") as f:
+                        f.write(f"one_bar_relaxed_candidates={relaxed_bars} picked={best_pair}\n")
+                return best_pair
         # If only one bar found, try Hough-lines to find another strong vertical line
         hough = _detect_vertical_lines_hough(gray)
         # _detect_vertical_lines_hough returns list of (x,length) tuples — extract x centers
