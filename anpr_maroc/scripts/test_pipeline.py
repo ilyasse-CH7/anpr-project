@@ -73,6 +73,54 @@ def run_pipeline_on_image(
     region = parsed.get("right", "")
     matricule = f"{serie} | {letter} | {region}" if (serie or letter or region) else ocr_result.get("raw_text", "")
 
+    # Fallback automatique : si la lecture segmentée échoue, réessayer avec un crop agrandi + prétraitement
+    if not parsed.get("valid"):
+        try:
+            # agrandir la zone détectée si possible
+            if bbox is not None:
+                h_img, w_img = image.shape[:2]
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+                bw = int((x2 - x1) * 1.8)
+                bh = int((y2 - y1) * 1.8)
+                nx1 = max(0, cx - bw // 2)
+                ny1 = max(0, cy - bh // 2)
+                nx2 = min(w_img - 1, cx + bw // 2)
+                ny2 = min(h_img - 1, cy + bh // 2)
+                expanded = image[ny1:ny2, nx1:nx2]
+            else:
+                # si pas de bbox, utiliser image entière
+                expanded = plate_crop
+
+            # prétraitement rapide : CLAHE + upscaling
+            if expanded is not None and expanded.size > 0:
+                gray = cv2.cvtColor(expanded, cv2.COLOR_BGR2GRAY)
+                try:
+                    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                    gray = clahe.apply(gray)
+                except Exception:
+                    pass
+                enhanced = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                enhanced = cv2.resize(enhanced, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+
+                # relancer la lecture sur le crop amélioré
+                ocr_result2 = reader.read_and_parse(
+                    enhanced,
+                    try_segment=lambda img: segment_plate_by_layout(img),
+                )
+                parsed2 = ocr_result2.get("parsed", {})
+                # si la seconde passe est meilleure (valid ou plus de champs détectés), on garde
+                if parsed2.get("valid") or (parsed2.get("left") or parsed2.get("letter") or parsed2.get("right")):
+                    ocr_result = ocr_result2
+                    parsed = parsed2
+                    serie = parsed.get("left", "")
+                    letter = parsed.get("letter", "")
+                    region = parsed.get("right", "")
+                    matricule = f"{serie} | {letter} | {region}" if (serie or letter or region) else ocr_result.get("raw_text", "")
+        except Exception:
+            # ne pas interrompre la pipeline pour un fallback qui échoue
+            pass
+
     print(f"\n--- RÉSULTATS DE LECTURE (OCR) ---")
     print(f" • Numéro de Série (Gauche)   : {serie if serie else '(non détecté)'}")
     print(f" • Lettre Arabe     (Centre)   : {letter if letter else '(non détectée)'}")
