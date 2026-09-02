@@ -174,6 +174,7 @@ def process_frame(
     save_dir: Path | None = None,
     post_url: str | None = None,
     post_headers: dict | None = None,
+    display: bool = True,
 ):
     # 1. detect plate
     bbox = None
@@ -184,20 +185,28 @@ def process_frame(
         print(f"[WARN] detect_plate error: {e}")
         bbox = None
 
+    vis_frame = frame.copy()
+
     is_already_cropped = False
     if bbox is not None:
         x1, y1, x2, y2 = bbox
         plate_crop = frame[y1:y2, x1:x2]
+        # Draw green bounding box for visualization
+        if display:
+            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            cv2.putText(vis_frame, "Plaque detectee", (x1, max(y1 - 10, 30)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     else:
         plate_crop = frame
         is_already_cropped = True
+        if display:
+            cv2.putText(vis_frame, "Pas de plaque detectable", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
     # 2. run OCR + segmentation
     try:
         ocr_result = reader.read_and_parse(plate_crop, try_segment=lambda img: segment_plate_by_layout(img))
     except Exception as e:
         print(f"[ERROR] read_and_parse failed: {e}")
-        return None
+        return None, vis_frame if display else None
 
     parsed = ocr_result.get("parsed", {})
     serie = parsed.get("left", "")
@@ -224,6 +233,13 @@ def process_frame(
         "raw_text": raw,
     }
 
+    # Add OCR result text to visualization
+    if display and bbox is not None:
+        mat_text = result["matricule"]
+        y_offset = y2 + 30
+        cv2.putText(vis_frame, f"Matricule: {mat_text}", (x1, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+        cv2.putText(vis_frame, f"Conf: {letter_conf:.2f} | Valid: {valid}", (x1, y_offset + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1)
+
     # save crop if requested
     crop_path = None
     if save_dir is not None:
@@ -249,7 +265,7 @@ def process_frame(
         # append to persistent queue; worker thread will deliver reliably
         _append_pending({"payload": payload, "meta": {"detected_at": result["timestamp"]}})
 
-    return result
+    return result, vis_frame if display else None
 
 
 def main():
@@ -262,6 +278,7 @@ def main():
     parser.add_argument("--save-dir", type=str, default="data/pipeline_output/live", help="Folder to save plate crops and annotated frames")
     parser.add_argument("--cooldown", type=float, default=6.0, help="Seconds to wait before reporting the same matricule again")
     parser.add_argument("--letter-threshold", type=float, default=0.75, help="Arabic CNN acceptance threshold (0..1)")
+    parser.add_argument("--no-display", action="store_true", help="Disable video window display")
     args = parser.parse_args()
 
     # prepare reader
@@ -294,11 +311,13 @@ def main():
 
     save_dir = Path(args.save_dir)
     last_seen = {}
+    display = not args.no_display
 
     print("Starting live ANPR. Press Ctrl-C to stop.")
     print("Source:", src)
     print("Backend post URL:", args.post_url)
     print("Save dir:", save_dir)
+    print("Display: ON" if display else "Display: OFF")
 
     try:
         while True:
@@ -308,10 +327,14 @@ def main():
                 time.sleep(max(0.1, args.interval))
                 continue
 
-            res = process_frame(frame, reader, model_path="models/plate_detector.pt", conf_threshold=args.conf, save_dir=save_dir, post_url=args.post_url, post_headers=post_headers)
+            res, vis_frame = process_frame(frame, reader, model_path="models/plate_detector.pt", conf_threshold=args.conf, save_dir=save_dir, post_url=args.post_url, post_headers=post_headers, display=display)
             if res is None:
                 # nothing produced
-                print(f"[{iso_ts()}] No result")
+                if display:
+                    if vis_frame is not None:
+                        cv2.imshow("ANPR Live", vis_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
             else:
                 mat = res.get("matricule", "")
                 now = time.time()
@@ -319,26 +342,26 @@ def main():
                 seen = last_seen.get(mat)
                 if mat and (seen is None or (now - seen) >= cooldown):
                     last_seen[mat] = now
-                    # clear terminal-friendly one-line output
-                    valid_flag = "VALID" if res.get("valid") else "INVALID"
-                    left = res.get("left", "")
-                    letter = res.get("letter", "")
-                    right = res.get("right", "")
-                    conf = res.get("letter_conf", 0.0)
-                    ts = res.get("timestamp")
-                    print(f"[{ts}] {left} | {letter} | {right}    {valid_flag}    letter_conf={conf:.3f}    raw='{res.get('raw_text','')}'")
-                    if res.get("crop_path"):
-                        print(f"    crop_saved: {res['crop_path']}")
+                    # Terminal output: just the matricule
+                    print(f"{mat}")
                 # else skip duplicate reporting
+
+                # Display video frame with annotations
+                if display and vis_frame is not None:
+                    cv2.imshow("ANPR Live", vis_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
 
             # sleep to control processing rate
             dt = time.time() - t0
             to_sleep = max(0.0, args.interval - dt)
             time.sleep(to_sleep)
     except KeyboardInterrupt:
-        print("Stopping live ANPR")
+        print("\nStopping live ANPR")
     finally:
         capture.release()
+        if display:
+            cv2.destroyAllWindows()
         if post_worker:
             post_worker.stop()
 
