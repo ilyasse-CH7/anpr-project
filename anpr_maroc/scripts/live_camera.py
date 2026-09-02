@@ -276,8 +276,9 @@ def main():
     parser.add_argument("--post-url", type=str, default=os.getenv("ANPR_BACKEND_URL"), help="Optional backend URL to POST results")
     parser.add_argument("--auth-token", type=str, default=os.getenv("ANPR_AUTH_TOKEN"), help="Optional bearer token for backend auth")
     parser.add_argument("--save-dir", type=str, default="data/pipeline_output/live", help="Folder to save plate crops and annotated frames")
-    parser.add_argument("--cooldown", type=float, default=6.0, help="Seconds to wait before reporting the same matricule again")
+    parser.add_argument("--cooldown", type=float, default=6.0, help="Seconds to wait before reporting the same matricule again; use 0.0 to accept every frame")
     parser.add_argument("--letter-threshold", type=float, default=0.75, help="Arabic CNN acceptance threshold (0..1)")
+    parser.add_argument("--debug-dir", type=str, default=None, help="Optional folder to save left/letter/right segmentation debug crops")
     parser.add_argument("--no-display", action="store_true", help="Disable video window display")
     args = parser.parse_args()
 
@@ -312,12 +313,17 @@ def main():
     save_dir = Path(args.save_dir)
     last_seen = {}
     display = not args.no_display
+    debug_dir = Path(args.debug_dir) if args.debug_dir else None
+    if debug_dir is not None:
+        debug_dir.mkdir(parents=True, exist_ok=True)
 
     print("Starting live ANPR. Press Ctrl-C to stop.")
     print("Source:", src)
     print("Backend post URL:", args.post_url)
     print("Save dir:", save_dir)
     print("Display: ON" if display else "Display: OFF")
+    if debug_dir is not None:
+        print("Debug dir:", debug_dir)
 
     try:
         while True:
@@ -328,6 +334,27 @@ def main():
                 continue
 
             res, vis_frame = process_frame(frame, reader, model_path="models/plate_detector.pt", conf_threshold=args.conf, save_dir=save_dir, post_url=args.post_url, post_headers=post_headers, display=display)
+            # Live debug crops for center/left/right segmentation when requested
+            if debug_dir is not None:
+                try:
+                    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+                    debug_sub = debug_dir / ts
+                    debug_sub.mkdir(parents=True, exist_ok=True)
+                    seg_fn = lambda img: segment_plate_by_layout(img, debug_dir=str(debug_sub))
+                    # Re-run segmentation only for debug artifact generation if a plate was detected and has a crop
+                    if res is not None and res.get("crop_path"):
+                        plate_for_debug = frame.copy()
+                        # extract bbox if possible before processing again to keep same crop
+                        try:
+                            det = detect_plate(plate_for_debug, model_path="models/plate_detector.pt", conf_threshold=args.conf)
+                            if det is not None:
+                                x1, y1, x2, y2 = det
+                                plate_for_debug = plate_for_debug[y1:y2, x1:x2]
+                            seg_fn(plate_for_debug)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    print(f"[WARN] debug crop generation failed: {e}")
             if res is None:
                 # nothing produced
                 if display and vis_frame is not None:
