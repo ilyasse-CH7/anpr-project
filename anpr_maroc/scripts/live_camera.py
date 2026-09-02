@@ -330,11 +330,15 @@ def main():
             res, vis_frame = process_frame(frame, reader, model_path="models/plate_detector.pt", conf_threshold=args.conf, save_dir=save_dir, post_url=args.post_url, post_headers=post_headers, display=display)
             if res is None:
                 # nothing produced
-                if display:
-                    if vis_frame is not None:
+                if display and vis_frame is not None:
+                    try:
                         cv2.imshow("ANPR Live", vis_frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord('q'):
+                            break
+                    except Exception as e:
+                        print(f"[WARN] Display error: {e}")
+                        display = False
             else:
                 mat = res.get("matricule", "")
                 now = time.time()
@@ -348,9 +352,14 @@ def main():
 
                 # Display video frame with annotations
                 if display and vis_frame is not None:
-                    cv2.imshow("ANPR Live", vis_frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
+                    try:
+                        cv2.imshow("ANPR Live", vis_frame)
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord('q'):
+                            break
+                    except Exception as e:
+                        print(f"[WARN] Display error: {e}")
+                        display = False
 
             # sleep to control processing rate
             dt = time.time() - t0
