@@ -83,26 +83,36 @@ def _pop_pending_first() -> dict | None:
         return None
 
 
-def send_post_with_retries(url: str, payload: dict, headers: dict | None = None, max_attempts: int = 5) -> tuple[bool, str]:
+def send_post_with_retries(url: str, payload: dict, headers: dict | None = None, files_path: str | None = None, max_attempts: int = 5) -> tuple[bool, str]:
+    """Send payload reliably. If files_path is provided, perform multipart upload where the JSON payload is placed in the 'payload' form field and the image is sent as file 'image'."""
     if requests is None:
         return False, "requests-missing"
     attempt = 0
     backoff = 1.0
+    last_msg = ""
     while attempt < max_attempts:
         try:
-            r = requests.post(url, json=payload, headers=headers or {}, timeout=8)
+            if files_path:
+                # multipart: put payload as a JSON string in a form field and attach file
+                with open(files_path, "rb") as fh:
+                    files = {"image": (Path(files_path).name, fh, "image/jpeg")}
+                    data = {"payload": json.dumps(payload, ensure_ascii=False)}
+                    r = requests.post(url, data=data, files=files, headers=headers or {}, timeout=10)
+            else:
+                r = requests.post(url, json=payload, headers=headers or {}, timeout=8)
+
             if 200 <= r.status_code < 300:
                 return True, str(r.status_code)
             else:
-                msg = f"status:{r.status_code}"
+                last_msg = f"status:{r.status_code}"
                 print(f"[WARN] post returned {r.status_code}: {r.text}")
         except Exception as e:
-            msg = str(e)
+            last_msg = str(e)
             print(f"[WARN] post attempt {attempt+1} failed: {e}")
         attempt += 1
         time.sleep(backoff)
         backoff = min(30.0, backoff * 2)
-    return False, msg
+    return False, last_msg
 
 
 class PostWorker(threading.Thread):
@@ -121,19 +131,36 @@ class PostWorker(threading.Thread):
     def run(self):
         print(f"PostWorker started, delivering to {self.url}")
         while not self._stop.is_set():
-            payload = _pop_pending_first()
-            if payload is None:
+            item = _pop_pending_first()
+            if item is None:
                 time.sleep(self.poll_interval)
                 continue
-            ok, info = send_post_with_retries(self.url, payload, headers=self.headers, max_attempts=4)
+            # item can be either a raw payload dict or wrapper {"payload":..., "meta":...}
+            if isinstance(item, dict) and "payload" in item:
+                payload = item.get("payload")
+            else:
+                payload = item
+
+            files_path = None
+            if isinstance(payload, dict) and payload.get("crop_path"):
+                files_path = payload.get("crop_path")
+
+            ok, info = send_post_with_retries(self.url, payload, headers=self.headers, files_path=files_path, max_attempts=4)
             if not ok:
-                # Re-append payload to end of queue for retry later
+                # Re-append item to end of queue for retry later
                 print(f"[WARN] failed to deliver payload, requeueing: {info}")
-                _append_pending(payload)
+                _append_pending(item)
                 # wait before next try to avoid tight loop
                 time.sleep(5.0)
             else:
-                print(f"[INFO] delivered payload: {payload.get('matricule')} -> {info}")
+                # best-effort extract matricule for logging
+                mat = None
+                try:
+                    if isinstance(payload, dict):
+                        mat = payload.get("matricule") or payload.get("left")
+                except Exception:
+                    mat = None
+                print(f"[INFO] delivered payload: {mat} -> {info}")
 
     def stop(self):
         self._stop.set()
