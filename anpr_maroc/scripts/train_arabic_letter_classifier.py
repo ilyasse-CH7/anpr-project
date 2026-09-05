@@ -36,7 +36,15 @@ class LetterDataset(Dataset):
         image = cv2.imread(str(path))
         if image is None:
             raise RuntimeError(f"Unreadable image: {path}")
-        glyph = preprocess_letter(image)
+        try:
+            glyph = preprocess_letter(image)
+        except Exception:
+            # Fallback for datasets with isolated small glyphs (e.g., AHCD).
+            # Some images have strokes touching edges and preprocess_letter removes them entirely.
+            # Use a conservative resize+normalization instead.
+            img_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+            glyph = cv2.resize(img_gray, (96, 96), interpolation=cv2.INTER_AREA)
+            glyph = glyph.astype('float32') / 255.0
         if self.augment:
             angle = random.uniform(-5.0, 5.0)
             matrix = cv2.getRotationMatrix2D((48, 48), angle, random.uniform(0.92, 1.08))
@@ -63,6 +71,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--allow-small-dataset", action="store_true", help="Only for pipeline smoke tests, never production.")
+    parser.add_argument("--pretrained", type=Path, help="Optional pretrained checkpoint to initialize feature extractor (loads features only).")
     args = parser.parse_args()
 
     labels, examples = collect_examples(args.data)
@@ -78,6 +87,27 @@ def main() -> None:
     train_loader = DataLoader(LetterDataset(training, augment=True), batch_size=args.batch_size, shuffle=True)
     valid_loader = DataLoader(LetterDataset(validation, augment=False), batch_size=args.batch_size)
     model = ArabicLetterCNN(len(labels))
+    # If pretrained checkpoint provided, load feature extractor weights only (safe when number of classes differs)
+    if args.pretrained:
+        ckpt_path = Path(args.pretrained)
+        if ckpt_path.is_file():
+            print(f"Loading pretrained checkpoint from {ckpt_path} (features only)")
+            ckpt = torch.load(ckpt_path, map_location='cpu')
+            state = ckpt.get('state_dict', ckpt if isinstance(ckpt, dict) else None)
+            if state is None:
+                state = ckpt
+            model_state = model.state_dict()
+            # copy keys belonging to features
+            copied = 0
+            for k, v in state.items():
+                if k.startswith('features'):
+                    if k in model_state and model_state[k].shape == v.shape:
+                        model_state[k] = v
+                        copied += 1
+            model.load_state_dict(model_state)
+            print(f"Copied {copied} feature tensors from checkpoint")
+        else:
+            print(f"Pretrained checkpoint {ckpt_path} not found, skipping")
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     loss_fn = nn.CrossEntropyLoss()
     for epoch in range(args.epochs):

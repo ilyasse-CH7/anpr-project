@@ -53,6 +53,7 @@ class EasyOCRReader:
         self.letter_model_threshold = letter_model_threshold
         # instantiate EasyOCR reader once
         self.reader = easyocr.Reader(self.languages, gpu=self.gpu)
+        self.letter_model_threshold = max(0.65, min(0.80, letter_model_threshold))
 
     def _load_image(self, image: t.Union[str, np.ndarray]) -> np.ndarray:
         """Load image from path or pass-through numpy array (BGR numpy expected).
@@ -97,6 +98,7 @@ class EasyOCRReader:
         - CLAHE (adaptive histogram equalization)
         - slight gaussian blur
         - morphological closing to reduce small gaps
+        - optional upscaling to improve thin glyphs on small plate crops
         Returns BGR image suitable for EasyOCR (converted back to 3-channel)
         """
         if img is None:
@@ -105,23 +107,30 @@ class EasyOCRReader:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
             gray = img
+
         # CLAHE to improve local contrast (helps thin strokes)
         try:
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             gray = clahe.apply(gray)
         except Exception:
             try:
                 gray = cv2.equalizeHist(gray)
             except Exception:
                 pass
-        # slight blur to reduce noise
+
+        # light denoise + threshold style to stabilise digits on CPU
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        # morphological closing to reduce small holes in strokes
         try:
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
         except Exception:
             pass
+
+        # upscale small zones to help digits and central letter detection
+        h, w = gray.shape
+        if max(h, w) < 80:
+            gray = cv2.resize(gray, (max(64, w * 2), max(64, h * 2)), interpolation=cv2.INTER_CUBIC)
+
         return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
     def _filter_letter_candidate(self, text: str) -> str:
@@ -359,6 +368,43 @@ class EasyOCRReader:
                 best_score = score
                 best_letter = ch
         return best_letter if best_score < 60 else ""
+
+    def filter_plate_candidates(self, ocr_full: t.Sequence[t.Dict[str, t.Any]]) -> t.List[str]:
+        """Keep OCR tokens likely to contain a Moroccan matricule.
+
+        This is a fallback used when segmentation fails and we need to parse a full-image OCR output.
+        """
+        candidates: t.List[str] = []
+        for item in ocr_full or []:
+            txt = str(item.get("text", "")).strip()
+            if not txt:
+                continue
+            # keep arabic letters, digits and common separators; reject obviously empty garbage.
+            cleaned = re.sub(r"[^0-9\u0600-\u06FF\s\-|_/|]", "", txt)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if len(cleaned) < 2:
+                continue
+            candidates.append(cleaned)
+        return candidates
+
+    def classify_matricule(self, candidates: t.Sequence[str]) -> t.Dict[str, t.Any]:
+        """Classify a full-image OCR token list into left/letter/right blocks.
+
+        This is intentionally conservative: it returns the best candidate and a valid flag only when the
+        candidate matches a Moroccan plate shape (digits + one Arabic letter + digits).
+        """
+        best: t.Dict[str, t.Any] = {"raw": "", "left": "", "letter": "", "right": "", "valid": False}
+        for cand in candidates or []:
+            parsed = self.parse_matricule(cand)
+            if parsed.get("valid"):
+                return parsed
+            # if not valid yet, keep the strongest-looking one by pattern score
+            score = 0
+            score += len(re.findall(r"\d", cand))
+            score += 3 if self.ARABIC_RE.search(cand) else 0
+            if score > 0 and (len(best["raw"]) < len(cand) or not best["raw"]):
+                best = parsed
+        return best
 
     def parse_matricule(self, text: t.Union[str, t.Dict[str, str], t.Sequence[str], None]) -> t.Dict[str, t.Any]:
         """Validate a Moroccan plate from either:

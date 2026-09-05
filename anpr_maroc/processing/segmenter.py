@@ -670,6 +670,13 @@ def segment_plate(image: np.ndarray, margin: int = 6, debug_dir: t.Optional[str]
     middle_end = max(middle_start + 1, right_x - edge_margin)
     right_start = min(w, right_x + edge_margin)
 
+    # Robust fallback when the detected bars are too close or produce a tiny middle region
+    if middle_end <= middle_start + 4 or (right_start - middle_start) < max(12, int(0.12 * w)):
+        left_end = max(1, int(w * 0.30))
+        middle_start = max(left_end + 1, int(w * 0.38))
+        middle_end = min(w - 1, int(w * 0.62))
+        right_start = max(middle_end + 1, int(w * 0.70))
+
     # final crops (on plate crop)
     left = plate[:, :left_end]
     middle = plate[:, middle_start:middle_end]
