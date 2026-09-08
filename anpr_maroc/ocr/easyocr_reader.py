@@ -48,6 +48,8 @@ class EasyOCRReader:
         self.languages = languages
         self.gpu = gpu
         self.conf_threshold = conf_threshold
+        set_str = "".join(self.ARABIC_LETTER_SET)
+        self.ARABIC_LETTER_RE = re.compile(rf"^[{set_str}]$")
         model_path = letter_model_path or os.getenv("ANPR_ARABIC_LETTER_MODEL", str(DEFAULT_MODEL_PATH))
         self.letter_model = ArabicLetterClassifier(model_path)
         self.letter_model_threshold = letter_model_threshold
@@ -291,8 +293,6 @@ class EasyOCRReader:
                     else:
                         out.append({"zone": name, "text": best[1], "conf": float(best[2])})
         return out
-
-    ARABIC_LETTER_RE = re.compile(r"^[\u0621-\u064A]$")
 
     def _render_letter_template(self, letter: str, size: int = 64) -> np.ndarray:
         """Render a template for an Arabic letter using a system font; used as a fallback recognizer."""

@@ -187,7 +187,6 @@ def process_frame(
 
     vis_frame = frame.copy()
 
-    is_already_cropped = False
     if bbox is not None:
         x1, y1, x2, y2 = bbox
         plate_crop = frame[y1:y2, x1:x2]
@@ -197,7 +196,6 @@ def process_frame(
             cv2.putText(vis_frame, "Plaque detectee", (x1, max(y1 - 10, 30)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     else:
         plate_crop = frame
-        is_already_cropped = True
         if display:
             cv2.putText(vis_frame, "Pas de plaque detectable", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 

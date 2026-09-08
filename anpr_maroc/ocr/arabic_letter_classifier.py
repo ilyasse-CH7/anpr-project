@@ -28,7 +28,6 @@ def _find_font() -> t.Optional[str]:
 def build_templates(size: int = 64, font_path: t.Optional[str] = None):
     """Render templates for allowed letters into binary images (uint8) sized (size,size).
     Caches templates in module variable TEMPLATES."""
-    global TEMPLATES
     if TEMPLATES:
         return TEMPLATES
     if font_path is None:

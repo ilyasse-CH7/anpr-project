@@ -12,7 +12,6 @@ import argparse
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from anpr_maroc.detection.plate_detector import detect_plate
 from anpr_maroc.ocr.easyocr_reader import EasyOCRReader
@@ -35,11 +34,10 @@ def run_pipeline_on_image(
         raise FileNotFoundError(f"Impossible de lire l'image : {image_path}")
 
     h, w = image.shape[:2]
-    aspect_ratio = w / float(h) if h > 0 else 1.0
 
-    print(f"\n=======================================================")
+    print("\n=======================================================")
     print(f"Traitement de l'image : {image_path.name} ({w}x{h} px)")
-    print(f"=======================================================")
+    print("=======================================================")
 
     # 1. Étape Détection YOLO
     bbox = None
@@ -56,7 +54,7 @@ def run_pipeline_on_image(
     else:
         # Si YOLO ne trouve pas de boîte, l'image est peut-être déjà une plaque recadrée (ex: 3.png, 8.jpg)
         print(f"[?] Aucune plaque détectée par YOLO avec conf={conf_threshold}.")
-        print(f"[*] Tentative de lecture directe sur l'image entière (cas plaque déjà recadrée)...")
+        print("[*] Tentative de lecture directe sur l'image entière (cas plaque déjà recadrée)...")
         plate_crop = image
         is_already_cropped = True
         x1, y1, x2, y2 = 0, 0, w, h
@@ -121,7 +119,7 @@ def run_pipeline_on_image(
             # ne pas interrompre la pipeline pour un fallback qui échoue
             pass
 
-    print(f"\n--- RÉSULTATS DE LECTURE (OCR) ---")
+    print("\n--- RÉSULTATS DE LECTURE (OCR) ---")
     print(f" • Numéro de Série (Gauche)   : {serie if serie else '(non détecté)'}")
     print(f" • Lettre Arabe     (Centre)   : {letter if letter else '(non détectée)'}")
     print(f" • Code Région      (Droite)   : {region if region else '(non détecté)'}")

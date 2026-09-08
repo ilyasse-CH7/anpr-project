@@ -45,7 +45,7 @@ def main() -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"=== Test d'intégration de détection de plaque ===")
+    print("=== Test d'intégration de détection de plaque ===")
     print(f"Modèle : {args.model}")
     print(f"Seuil de confiance : {args.conf}")
     print(f"Dossier de sortie : {output_dir}\n")

@@ -463,15 +463,17 @@ def _detect_plate_contour(image: np.ndarray) -> t.Tuple[np.ndarray, t.Tuple[int,
     return crop2, (bx2, by2, bw2, bh2)
 
 
-def _find_horizontal_separator(gray: np.ndarray) -> int:
-    """Return the y-position of a full-width horizontal separator if one exists.
+def _horizontal_separator_band(gray: np.ndarray) -> t.Tuple[int, int, float, float]:
+    """Measure the strongest central horizontal separator band.
 
-    This is used for 2-line plates where the top and bottom rows are separated by a
-    dark, nearly horizontal bar spanning the plate width.
+    Returns ``(y_center, thickness, peak_ratio, contrast)``.  ``y_center`` is
+    ``-1`` when no sufficiently wide dark band is found.  ``peak_ratio`` is the
+    maximal dark-pixel ratio in the chosen band and ``contrast`` measures that
+    peak above the median dark-pixel ratio of the other central rows.
     """
     h, w = gray.shape
     if h <= 0 or w <= 0:
-        return h // 2
+        return -1, 0, 0.0, 0.0
 
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     _, thr = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -480,12 +482,12 @@ def _find_horizontal_separator(gray: np.ndarray) -> int:
     y0, y1 = int(0.15 * h), int(0.85 * h)
     band = dark_mask[y0:y1, :]
     if band.size == 0:
-        return h // 2
+        return -1, 0, 0.0, 0.0
 
     row_ratio = np.sum(band, axis=1) / float(band.shape[1])
     idxs = np.where(row_ratio > 0.55)[0]
     if idxs.size == 0:
-        return -1
+        return -1, 0, float(row_ratio.max(initial=0.0)), 0.0
 
     groups = np.split(idxs, np.where(np.diff(idxs) != 1)[0] + 1)
     best_group = None
@@ -498,10 +500,21 @@ def _find_horizontal_separator(gray: np.ndarray) -> int:
             best_len = g.size
 
     if best_group is None:
-        return -1
+        return -1, 0, float(row_ratio.max(initial=0.0)), 0.0
 
-    y = y0 + int((best_group[0] + best_group[-1]) / 2.0)
-    return max(0, min(h - 1, y))
+    y_center = y0 + int((best_group[0] + best_group[-1]) / 2.0)
+    thickness = int(best_group.size)
+    peak_ratio = float(row_ratio[best_group].max())
+    background = np.delete(row_ratio, best_group)
+    background_ratio = float(np.median(background)) if background.size else 0.0
+    contrast = max(0.0, peak_ratio - background_ratio)
+    return max(0, min(h - 1, y_center)), thickness, peak_ratio, contrast
+
+
+def _find_horizontal_separator(gray: np.ndarray) -> int:
+    """Return the center of the measured horizontal separator, if present."""
+    y_center, _, _, _ = _horizontal_separator_band(gray)
+    return y_center
 
 
 def _find_top_vertical_separator(gray: np.ndarray) -> int:
@@ -549,11 +562,16 @@ def detect_plate_layout(image: np.ndarray) -> str:
     if h <= 0 or w <= 0:
         return "1_ligne"
 
-    split_y = _find_horizontal_separator(gray)
+    split_y, thickness, _peak_ratio, contrast = _horizontal_separator_band(gray)
     if split_y < 0:
         return "1_ligne"
     # A 2-line plate has a central dark separator band. A 1-line plate does not.
-    if 0.3 * h <= split_y <= 0.85 * h and abs(split_y - (h / 2.0)) <= 0.5 * h:
+    if (
+        0.3 * h <= split_y <= 0.85 * h
+        and abs(split_y - (h / 2.0)) <= 0.5 * h
+        and thickness <= 0.35 * h
+        and contrast >= 0.12
+    ):
         return "2_lignes"
     return "1_ligne"
 
