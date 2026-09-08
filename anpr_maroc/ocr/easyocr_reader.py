@@ -34,7 +34,7 @@ class EasyOCRReader:
         gpu: bool = False,
         conf_threshold: float = 0.3,
         letter_model_path: t.Optional[str] = None,
-        letter_model_threshold: float = 0.80,
+        letter_model_threshold: float = 0.65,
     ):
         """Initialize reader.
 
@@ -55,7 +55,6 @@ class EasyOCRReader:
         self.letter_model_threshold = letter_model_threshold
         # instantiate EasyOCR reader once
         self.reader = easyocr.Reader(self.languages, gpu=self.gpu)
-        self.letter_model_threshold = max(0.65, min(0.80, letter_model_threshold))
 
     def _load_image(self, image: t.Union[str, np.ndarray]) -> np.ndarray:
         """Load image from path or pass-through numpy array (BGR numpy expected).
@@ -72,12 +71,38 @@ class EasyOCRReader:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         return img
 
-    def read_plate(self, image: t.Union[str, np.ndarray]) -> t.List[t.Dict[str, t.Any]]:
+    def _preprocess_for_easyocr(self, image: np.ndarray) -> np.ndarray:
+        """Normalize a plate or numeric zone before an EasyOCR inference.
+
+        Small crops are enlarged to a stable glyph height, then CLAHE and a
+        light blur improve local contrast while suppressing fine sensor noise.
+        """
+        img = self._load_image(image)
+        height, width = img.shape[:2]
+        if 0 < height < 120:
+            scale = 120.0 / height
+            img = cv2.resize(
+                img,
+                (max(1, int(round(width * scale))), 120),
+                interpolation=cv2.INTER_CUBIC,
+            )
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    def read_plate(
+        self, image: t.Union[str, np.ndarray], preprocess: bool = True
+    ) -> t.List[t.Dict[str, t.Any]]:
         """Run EasyOCR on full plate image and return structured results.
 
         Returns list of dicts: { 'bbox': [(x1,y1),(x2,y2),(x3,y3),(x4,y4)], 'text': str, 'conf': float }
         """
         img = self._load_image(image)
+        if preprocess:
+            img = self._preprocess_for_easyocr(img)
         # EasyOCR expects RGB
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         raw = self.reader.readtext(rgb)
@@ -105,6 +130,7 @@ class EasyOCRReader:
         """
         if img is None:
             return img
+        img = self._preprocess_for_easyocr(img)
         if img.ndim == 3:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
@@ -128,28 +154,11 @@ class EasyOCRReader:
         except Exception:
             pass
 
-        # upscale small zones to help digits and central letter detection
-        h, w = gray.shape
-        if max(h, w) < 80:
-            gray = cv2.resize(gray, (max(64, w * 2), max(64, h * 2)), interpolation=cv2.INTER_CUBIC)
-
         return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-    def _filter_letter_candidate(self, text: str) -> str:
-        """Keep only genuine Arabic letters, rejecting Arabic-Indic digits and punctuation."""
-        if text is None:
-            return ""
-        cleaned = str(text).strip()
-        if not cleaned:
-            return ""
-        # Remove accents/punctuation, keep only single char Arabic letters.
-        letters = []
-        for ch in cleaned:
-            if self.ARABIC_LETTER_RE.fullmatch(ch):
-                letters.append(ch)
-        return letters[0] if len(letters) == 1 else ""
-
-    def read_plate_zones(self, zones: t.List[t.Union[str, np.ndarray]]) -> t.List[t.Dict[str, t.Any]]:
+    def read_plate_zones(
+        self, zones: t.List[t.Union[str, np.ndarray]], preprocess: bool = True
+    ) -> t.List[t.Dict[str, t.Any]]:
         """OCR a list of zone images (left, letter, right) and return per-zone results.
 
         zones: list of 3 images (left_numbers, arabic_letter_zone, right_numbers)
@@ -160,104 +169,64 @@ class EasyOCRReader:
         names = ["left", "letter", "right"]
         for name, z in zip(names, zones):
             img = self._load_image(z)
-            # A trained plate-glyph model is authoritative for the letter
-            # zone.  It retains detached hamza/madda components, unlike the
-            # generic Arabic text recognizer and the former contour template.
-            if name == "letter" and self.letter_model.available:
-                model_letter, model_confidence = self.letter_model.predict(img)
-                if model_letter and model_confidence >= self.letter_model_threshold:
-                    if os.getenv("ANPR_DEBUG"):
-                        print(f"[DEBUG] dedicated letter model -> {model_letter} (conf={model_confidence:.3f})")
-                    out.append({"zone": name, "text": model_letter, "conf": model_confidence, "source": "arabic_letter_model"})
-                    continue
-            # apply per-zone preprocessing to improve recognition (helps & vs 6 confusion)
-            pre = self._preprocess_zone_for_ocr(img)
+            # The dedicated CNN is the sole recognizer for the letter zone: it
+            # retains detached hamza/madda components that EasyOCR and the
+            # former contour template both discard. No EasyOCR fallback here.
+            if name == "letter":
+                model_letter, model_confidence = ("", 0.0)
+                if self.letter_model.available:
+                    model_letter, model_confidence = self.letter_model.predict(img)
+                if os.getenv("ANPR_DEBUG"):
+                    print(f"[DEBUG] arabic_letter_model -> '{model_letter}' (conf={model_confidence:.3f})")
+                if model_letter and model_confidence < self.letter_model_threshold:
+                    model_letter = ""
+                out.append({"zone": name, "text": model_letter, "conf": model_confidence, "source": "arabic_letter_model"})
+                continue
             candidates = []
             allowlist_digits = "0123456789"
-            allowlist_letter = "ابتثجحخسشصضطظعغفقكلمنهوياءئؤةأآإ"
 
-            # Per-zone variant lists (isolate preprocessing per zone):
-            # - left: aggressive numeric preprocessing (adaptive binarize, open, close, upscales)
-            # - right: mild preprocessing (orig, pre, optional small adaptive)
-            # - letter: only orig/pre and dedicated padded upscaled variants
-            if name == 'left':
+            if not preprocess:
+                # First pass: exactly the raw crop, with no resize, CLAHE, blur
+                # or threshold-based variant.
+                variant_list = [("raw", img)]
+            else:
+                # Second pass: contrast enhancement and numeric variants.
+                base = self._preprocess_for_easyocr(img)
+                pre = self._preprocess_zone_for_ocr(img)
+                if name == 'left':
                 # Stable left-only pipeline: keep only a few variants and aggregate candidates later.
-                variant_list = [("orig", img), ("pre", pre)]
-                try:
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-                    num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
-                    if np.mean(num_thr) < 127:
-                        num_thr = 255 - num_thr
-                    num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
-                    variant_list.append(("num_pre", num_pre))
-                except Exception:
-                    pass
-            elif name == 'right':
+                    variant_list = [("base", base), ("pre", pre)]
+                    try:
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+                        num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
+                        if np.mean(num_thr) < 127:
+                            num_thr = 255 - num_thr
+                        num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
+                        variant_list.append(("num_pre", self._preprocess_for_easyocr(num_pre)))
+                    except Exception:
+                        pass
+                elif name == 'right':
                 # keep mild variants only
-                variant_list = [("orig", img), ("pre", pre)]
-                try:
-                    # small adaptive binarize as optional variant
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-                    num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
-                    if np.mean(num_thr) < 127:
-                        num_thr = 255 - num_thr
-                    num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
-                    variant_list.append(("num_pre", num_pre))
-                except Exception:
-                    pass
-            else:  # letter
-                variant_list = [("orig", img), ("pre", pre)]
+                    variant_list = [("base", base), ("pre", pre)]
+                    try:
+                        # small adaptive binarize as optional variant
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+                        num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
+                        if np.mean(num_thr) < 127:
+                            num_thr = 255 - num_thr
+                        num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
+                        variant_list.append(("num_pre", self._preprocess_for_easyocr(num_pre)))
+                    except Exception:
+                        pass
 
-            # Collect OCR results from variants
+            # Collect OCR results from variants; digits only for left/right.
             for variant_name, img_variant in variant_list:
                 rgb = cv2.cvtColor(self._load_image(img_variant), cv2.COLOR_BGR2RGB)
-                if name == 'letter':
-                    raw = self.reader.readtext(rgb, allowlist=allowlist_letter)
-                else:
-                    raw = self.reader.readtext(rgb, allowlist=allowlist_digits)
+                raw = self.reader.readtext(rgb, allowlist=allowlist_digits)
                 for bbox, text, conf in raw:
                     candidates.append((bbox, text, float(conf), variant_name))
-
-            # For the isolated Arabic letter, do a padded upscale pass too.
-            if name == 'letter':
-                pad = 20  # add more whitespace to avoid clipping of strokes
-                h0, w0 = img.shape[:2]
-                canvas = 255 * np.ones((h0 + 2 * pad, w0 + 2 * pad, 3), dtype=np.uint8)
-                canvas[pad:pad + h0, pad:pad + w0] = img
-                # try a stronger upscaling which often helps tiny isolated glyphs
-                up = cv2.resize(canvas, (0, 0), fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-                pre_up = self._preprocess_zone_for_ocr(up)
-                for variant_name, img_variant in [("up", up), ("pre_up", pre_up)]:
-                    rgb = cv2.cvtColor(self._load_image(img_variant), cv2.COLOR_BGR2RGB)
-                    raw = self.reader.readtext(rgb, allowlist=allowlist_letter)
-                    for bbox, text, conf in raw:
-                        candidates.append((bbox, text, float(conf), variant_name))
-
-            if name == 'letter':
-                valid_candidates = []
-                for bbox, text, conf, source in candidates:
-                    filtered = self._filter_letter_candidate(text)
-                    if filtered:
-                        valid_candidates.append((bbox, filtered, conf, source))
-                # If any easyOCR-letter candidates exist, pick the best regardless of confidence (we accept low conf for letter)
-                if valid_candidates:
-                    best = max(valid_candidates, key=lambda x: x[2])
-                    # debug log
-                    if os.getenv("ANPR_DEBUG"):
-                        print(f"[DEBUG] letter OCR candidates: {[ (v[1],v[2],v[3]) for v in valid_candidates ]}")
-                        print(f"[DEBUG] chosen letter from EasyOCR: {best[1]} (conf={best[2]:.3f}, src={best[3]})")
-                    out.append({"zone": name, "text": best[1], "conf": float(best[2])})
-                    continue
-
-                # Do not revive the old matchShapes fallback: it drops the
-                # detached marks that distinguish ا, أ, إ and آ.  A missing or
-                # low-confidence dedicated model deliberately yields no letter.
-                if os.getenv("ANPR_DEBUG"):
-                    print("[DEBUG] no Arabic letter from EasyOCR; dedicated model unavailable or below threshold")
-                out.append({"zone": name, "text": "", "conf": 0.0})
-                continue
 
             # numeric zones: keep numeric-only OCR candidates, reject letters/digits mixed noise.
             numeric_candidates = []
@@ -406,6 +375,11 @@ class EasyOCRReader:
                 best = parsed
         return best
 
+    @staticmethod
+    def _clean_numeric_block(value: t.Any) -> str:
+        """Keep ASCII digits only, preserving their left-to-right order."""
+        return re.sub(r"[^0-9]", "", str(value))
+
     def parse_matricule(self, text: t.Union[str, t.Dict[str, str], t.Sequence[str], None]) -> t.Dict[str, t.Any]:
         """Validate a Moroccan plate from either:
         - a raw OCR string
@@ -418,16 +392,18 @@ class EasyOCRReader:
             return {"raw": "", "left": "", "letter": "", "right": "", "valid": False}
 
         if isinstance(text, dict):
-            left = str(text.get("left", "")).strip()
+            left = self._clean_numeric_block(text.get("left", ""))
             letter = str(text.get("letter", "")).strip()
-            right = str(text.get("right", "")).strip()
+            right = self._clean_numeric_block(text.get("right", ""))
             valid = bool(re.fullmatch(r"\d{1,6}", left) and self.ARABIC_LETTER_RE.fullmatch(letter) and re.fullmatch(r"\d{1,6}", right))
             return {"raw": " ".join([left, letter, right]).strip(), "left": left, "letter": letter, "right": right, "valid": valid}
 
         if isinstance(text, (list, tuple)):
             if len(text) != 3:
                 return {"raw": str(text), "left": "", "letter": "", "right": "", "valid": False}
-            left, letter, right = [str(x).strip() for x in text]
+            left = self._clean_numeric_block(text[0])
+            letter = str(text[1]).strip()
+            right = self._clean_numeric_block(text[2])
             valid = bool(re.fullmatch(r"\d{1,6}", left) and self.ARABIC_LETTER_RE.fullmatch(letter) and re.fullmatch(r"\d{1,6}", right))
             return {"raw": " ".join([left, letter, right]).strip(), "left": left, "letter": letter, "right": right, "valid": valid}
 
@@ -438,29 +414,41 @@ class EasyOCRReader:
         # Best effort fallback: keep old raw-text approach when no segmentation is provided.
         m = self.MATRICULE_RE.search(s)
         if m:
-            return {"raw": s, "left": m.group('left'), "letter": m.group('letter'), "right": m.group('right'), "valid": True}
+            left = self._clean_numeric_block(m.group("left"))
+            letter = m.group("letter")
+            right = self._clean_numeric_block(m.group("right"))
+            valid = bool(re.fullmatch(r"\d{1,6}", left) and self.ARABIC_LETTER_RE.fullmatch(letter) and re.fullmatch(r"\d{1,6}", right))
+            return {"raw": s, "left": left, "letter": letter, "right": right, "valid": valid}
 
         # If text looks like three blocks already, parse them in order.
         parts = re.split(r"\s+|[-/|]", s)
         parts = [p for p in parts if p and p.strip()]
         if len(parts) >= 3:
-            left, letter, right = parts[0], parts[1], parts[2]
+            left = self._clean_numeric_block(parts[0])
+            letter = parts[1].strip()
+            right = self._clean_numeric_block(parts[2])
             valid = bool(re.fullmatch(r"\d{1,6}", left) and self.ARABIC_LETTER_RE.fullmatch(letter) and re.fullmatch(r"\d{1,6}", right))
             return {"raw": s, "left": left, "letter": letter, "right": right, "valid": valid}
 
         ar_match = self.ARABIC_RE.search(s)
         if ar_match:
             idx = ar_match.start()
-            left = re.findall(r"(\d{1,6})", s[:idx])
-            left = left[-1] if left else ""
-            right = re.findall(r"(\d{1,6})", s[idx + 1:])
-            right = right[0] if right else ""
-            return {"raw": s, "left": left, "letter": ar_match.group(0), "right": right, "valid": bool(left and right)}
+            left = self._clean_numeric_block(s[:idx])
+            right = self._clean_numeric_block(s[idx + 1:])
+            letter = ar_match.group(0)
+            valid = bool(re.fullmatch(r"\d{1,6}", left) and self.ARABIC_LETTER_RE.fullmatch(letter) and re.fullmatch(r"\d{1,6}", right))
+            return {"raw": s, "left": left, "letter": letter, "right": right, "valid": valid}
 
         return {"raw": s, "left": "", "letter": "", "right": "", "valid": False}
 
-    def read_and_parse(self, image: t.Union[str, np.ndarray], try_segment: t.Optional[t.Callable[..., t.List[np.ndarray]]] = None, debug_dir: t.Optional[str] = None) -> t.Dict[str, t.Any]:
-        """High-level helper: read plate and return parsed matricule.
+    def _read_and_parse_once(
+        self,
+        image: t.Union[str, np.ndarray],
+        try_segment: t.Optional[t.Callable[..., t.List[np.ndarray]]] = None,
+        debug_dir: t.Optional[str] = None,
+        preprocess: bool = False,
+    ) -> t.Dict[str, t.Any]:
+        """Run one raw or preprocessed OCR pass and return its parsed result.
 
         Behavior:
           - Run full-image OCR first to collect candidates.
@@ -471,7 +459,7 @@ class EasyOCRReader:
         img = self._load_image(image)
         h, w = img.shape[:2]
         # full-image OCR (candidates for classification and possible Arabic bbox)
-        ocr_full = self.read_plate(img)
+        ocr_full = self.read_plate(img, preprocess=preprocess)
         raw_text = " ".join([it["text"] for it in ocr_full])
 
         # if caller provided a segmenter, route by layout before running segmentation
@@ -489,7 +477,7 @@ class EasyOCRReader:
                     except TypeError:
                         zones = try_segment(img)
                 if len(zones) == 3:
-                    zone_results = self.read_plate_zones(zones)
+                    zone_results = self.read_plate_zones(zones, preprocess=preprocess)
                     texts = [zr['text'] for zr in zone_results]
                     parsed = self.parse_matricule({"left": texts[0], "letter": texts[1], "right": texts[2]})
                     parsed["raw_text"] = " ".join(texts)
@@ -522,7 +510,7 @@ class EasyOCRReader:
             left = img[:, :left_sep]
             middle = img[:, left_sep:right_sep]
             right = img[:, right_sep:]
-            zone_results = self.read_plate_zones([left, middle, right])
+            zone_results = self.read_plate_zones([left, middle, right], preprocess=preprocess)
             texts = [zr['text'] for zr in zone_results]
             parsed = self.parse_matricule({"left": texts[0], "letter": texts[1], "right": texts[2]})
             parsed["raw_text"] = " ".join(texts)
@@ -535,3 +523,29 @@ class EasyOCRReader:
         parsed["raw_text"] = raw_text
         parsed["candidates"] = candidates
         return {"raw_text": raw_text, "candidates": candidates, "parsed": parsed, "ocr_results": ocr_full}
+
+    def read_and_parse(
+        self,
+        image: t.Union[str, np.ndarray],
+        try_segment: t.Optional[t.Callable[..., t.List[np.ndarray]]] = None,
+        debug_dir: t.Optional[str] = None,
+    ) -> t.Dict[str, t.Any]:
+        """Read a plate in two passes, preserving a valid raw recognition.
+
+        The first pass intentionally uses unmodified pixels.  Only an invalid
+        or incomplete matricule triggers the enhanced second pass.
+        """
+        raw_result = self._read_and_parse_once(
+            image, try_segment=try_segment, debug_dir=debug_dir, preprocess=False
+        )
+        raw_parsed = raw_result.get("parsed", {})
+        required = ("left", "letter", "right")
+        if raw_parsed.get("valid") and all(raw_parsed.get(field) for field in required):
+            raw_result["ocr_pass"] = "raw"
+            return raw_result
+
+        enhanced_result = self._read_and_parse_once(
+            image, try_segment=try_segment, debug_dir=debug_dir, preprocess=True
+        )
+        enhanced_result["ocr_pass"] = "preprocessed"
+        return enhanced_result
