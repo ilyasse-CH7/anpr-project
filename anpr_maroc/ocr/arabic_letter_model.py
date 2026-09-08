@@ -23,7 +23,7 @@ except ImportError:  # Makes importing the OCR package safe without torch.
 
 
 IMAGE_SIZE = 96
-DEFAULT_MODEL_PATH = Path("models/arabic_letter_classifier.pt")
+DEFAULT_MODEL_PATH = Path("models/arabic_letter_classifier_finetuned.pt")
 
 
 def preprocess_letter(image: np.ndarray, size: int = IMAGE_SIZE) -> np.ndarray:

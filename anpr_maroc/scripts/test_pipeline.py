@@ -21,7 +21,7 @@ from anpr_maroc.processing.segmenter import segment_plate_by_layout
 def run_pipeline_on_image(
     image_path: Path,
     model_path: str = "models/plate_detector.pt",
-    conf_threshold: float = 0.25,
+    conf_threshold: float = 0.15,
     reader: EasyOCRReader | None = None,
     output_dir: Path | None = None,
 ) -> dict:
@@ -107,8 +107,13 @@ def run_pipeline_on_image(
                     try_segment=lambda img: segment_plate_by_layout(img),
                 )
                 parsed2 = ocr_result2.get("parsed", {})
-                # si la seconde passe est meilleure (valid ou plus de champs détectés), on garde
-                if parsed2.get("valid") or (parsed2.get("left") or parsed2.get("letter") or parsed2.get("right")):
+                # Ne remplacer que si la seconde passe est strictement meilleure :
+                # un repli non vide mais plus pauvre écrasait des lectures correctes.
+                def _score(p: dict) -> tuple:
+                    fields = [p.get("left", ""), p.get("letter", ""), p.get("right", "")]
+                    return (bool(p.get("valid")), sum(1 for f in fields if f), sum(len(f) for f in fields))
+
+                if _score(parsed2) > _score(parsed):
                     ocr_result = ocr_result2
                     parsed = parsed2
                     serie = parsed.get("left", "")
@@ -176,7 +181,7 @@ def main() -> None:
     parser.add_argument(
         "--conf",
         type=float,
-        default=0.25,
+        default=0.15,
         help="Seuil de confiance de détection YOLO.",
     )
     parser.add_argument(

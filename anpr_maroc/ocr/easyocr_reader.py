@@ -71,7 +71,7 @@ class EasyOCRReader:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         return img
 
-    def _preprocess_for_easyocr(self, image: np.ndarray) -> np.ndarray:
+    def _preprocess_for_easyocr(self, image: np.ndarray, numeric: bool = False) -> np.ndarray:
         """Normalize a plate or numeric zone before an EasyOCR inference.
 
         Small crops are enlarged to a stable glyph height, then CLAHE and a
@@ -90,6 +90,11 @@ class EasyOCRReader:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         gray = clahe.apply(gray)
+        if numeric:
+            # Reconnect thin strokes in degraded digits (notably 6 versus 5)
+            # immediately after local contrast enhancement.
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
         return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
@@ -117,7 +122,7 @@ class EasyOCRReader:
         results = self.read_plate(image)
         return " ".join([r["text"] for r in results])
 
-    def _preprocess_zone_for_ocr(self, img: np.ndarray) -> np.ndarray:
+    def _preprocess_zone_for_ocr(self, img: np.ndarray, numeric: bool = False) -> np.ndarray:
         """Per-zone preprocessing to improve OCR accuracy using CLAHE and light denoising.
 
         Steps:
@@ -130,7 +135,7 @@ class EasyOCRReader:
         """
         if img is None:
             return img
-        img = self._preprocess_for_easyocr(img)
+        img = self._preprocess_for_easyocr(img, numeric=numeric)
         if img.ndim == 3:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
@@ -185,41 +190,38 @@ class EasyOCRReader:
             candidates = []
             allowlist_digits = "0123456789"
 
-            if not preprocess:
-                # First pass: exactly the raw crop, with no resize, CLAHE, blur
-                # or threshold-based variant.
-                variant_list = [("raw", img)]
+            # Numeric OCR is always run on enhanced pixels.  This avoids a
+            # syntactically valid raw hallucination preventing the corrective
+            # pass from reaching a degraded digit such as 6.
+            base = self._preprocess_for_easyocr(img, numeric=True)
+            pre = self._preprocess_zone_for_ocr(img, numeric=True)
+            if name == 'left':
+                # Stable left-only pipeline: aggregate several enhanced views.
+                variant_list = [("base", base), ("pre", pre)]
+                try:
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+                    num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
+                    if np.mean(num_thr) < 127:
+                        num_thr = 255 - num_thr
+                    num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
+                    variant_list.append(("num_pre", self._preprocess_for_easyocr(num_pre, numeric=True)))
+                except Exception:
+                    pass
             else:
-                # Second pass: contrast enhancement and numeric variants.
-                base = self._preprocess_for_easyocr(img)
-                pre = self._preprocess_zone_for_ocr(img)
-                if name == 'left':
-                # Stable left-only pipeline: keep only a few variants and aggregate candidates later.
-                    variant_list = [("base", base), ("pre", pre)]
-                    try:
-                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-                        num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
-                        if np.mean(num_thr) < 127:
-                            num_thr = 255 - num_thr
-                        num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
-                        variant_list.append(("num_pre", self._preprocess_for_easyocr(num_pre)))
-                    except Exception:
-                        pass
-                elif name == 'right':
-                # keep mild variants only
-                    variant_list = [("base", base), ("pre", pre)]
-                    try:
-                        # small adaptive binarize as optional variant
-                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-                        num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
-                        if np.mean(num_thr) < 127:
-                            num_thr = 255 - num_thr
-                        num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
-                        variant_list.append(("num_pre", self._preprocess_for_easyocr(num_pre)))
-                    except Exception:
-                        pass
+                # The right block keeps the same enhancement chain, with a
+                # mild adaptive-threshold variant for short region codes.
+                variant_list = [("base", base), ("pre", pre)]
+                try:
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+                    num_thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 9)
+                    if np.mean(num_thr) < 127:
+                        num_thr = 255 - num_thr
+                    num_pre = cv2.cvtColor(num_thr, cv2.COLOR_GRAY2BGR)
+                    variant_list.append(("num_pre", self._preprocess_for_easyocr(num_pre, numeric=True)))
+                except Exception:
+                    pass
 
             # Collect OCR results from variants; digits only for left/right.
             for variant_name, img_variant in variant_list:
