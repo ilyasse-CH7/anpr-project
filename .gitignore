@@ -1,7 +1,40 @@
-"""Module placeholder."""
-\n# Local env file (secrets)
+# Local env file (secrets : identifiants caméra RTSP, mots de passe base)
 .env
+.env.local
+.env.*.local
 
 # Trained OCR weights are produced locally or by CI; keep the reproducible
 # extraction/training code and source crops under version control instead.
 models/*.pt
+
+# Sorties d'entraînement Ultralytics (courbes, matrices de confusion) :
+# régénérées à chaque run, aucune valeur en revue de code.
+runs/
+
+# Python virtualenvs. The prior .venv had its own internal `.gitignore: *`
+# (created by some tool other than stdlib venv) making it self-ignoring;
+# stdlib `python -m venv` does not add that file, so it is covered here
+# instead now that the venv was rebuilt on Python 3.12 for PaddleOCR.
+.venv/
+.venv-*/
+env/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# IDE : les fichiers projet partagés (.iml, misc.xml…) restent suivis,
+# seul l'état de session propre à chaque poste est ignoré.
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/shelf/
+.idea/httpRequests/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -565,11 +565,15 @@ def detect_plate_layout(image: np.ndarray) -> str:
     split_y, thickness, _peak_ratio, contrast = _horizontal_separator_band(gray)
     if split_y < 0:
         return "1_ligne"
-    # A 2-line plate has a central dark separator band. A 1-line plate does not.
+    # A genuine 2-line plate separator is a razor-thin printed line (~1-3% of
+    # the crop height, e.g. 8/660 on the validated cx.jpeg reference). Thick
+    # dark bands (car body edges, bumper shadows caught in a loose YOLO bbox)
+    # can otherwise mimic the position/contrast of a real separator while
+    # being an order of magnitude thicker, so thickness is the discriminant.
     if (
         0.3 * h <= split_y <= 0.85 * h
         and abs(split_y - (h / 2.0)) <= 0.5 * h
-        and thickness <= 0.35 * h
+        and thickness <= 0.10 * h
         and contrast >= 0.12
     ):
         return "2_lignes"

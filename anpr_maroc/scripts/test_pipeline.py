@@ -14,7 +14,7 @@ from pathlib import Path
 import cv2
 
 from anpr_maroc.detection.plate_detector import detect_plate
-from anpr_maroc.ocr.easyocr_reader import EasyOCRReader
+from anpr_maroc.ocr.paddleocr_reader import PaddleOCRReader
 from anpr_maroc.processing.segmenter import segment_plate_by_layout
 
 
@@ -22,12 +22,12 @@ def run_pipeline_on_image(
     image_path: Path,
     model_path: str = "models/plate_detector.pt",
     conf_threshold: float = 0.15,
-    reader: EasyOCRReader | None = None,
+    reader: PaddleOCRReader | None = None,
     output_dir: Path | None = None,
 ) -> dict:
     """Exécute la chaîne complète de traitement sur une image donnée."""
     if reader is None:
-        reader = EasyOCRReader()
+        reader = PaddleOCRReader()
 
     image = cv2.imread(str(image_path))
     if image is None:
@@ -206,7 +206,7 @@ def main() -> None:
         print("Aucune image spécifiée. Utilisez --image <chemin_image>")
         return
 
-    reader = EasyOCRReader()
+    reader = PaddleOCRReader()
     output_dir = Path(args.output)
 
     for img_p in image_list:

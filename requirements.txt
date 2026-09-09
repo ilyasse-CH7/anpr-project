@@ -1,26 +1,116 @@
-easyocr==1.7.2
+# PaddleOCR/paddlepaddle require Python <=3.13 (no cp314 wheel as of this
+# writing) -- the venv for this project must be created with Python 3.12/3.13.
+#
+# paddlex's "ocr-core" extra hard-pins opencv-contrib-python==4.10.0.84, and
+# checks for that exact package's metadata at import time. It shares its
+# top-level `cv2/` module with opencv-python(-headless), so whichever is
+# installed last wins on disk. Install in this order to keep the project's
+# pinned OpenCV 5.x as the actual runtime `cv2` while still satisfying
+# paddlex's metadata check:
+#   pip install -r requirements.txt
+#   pip install --force-reinstall --no-deps opencv-python==5.0.0.93 opencv-python-headless==5.0.0.93
+# Verify with: python -c "import cv2; print(cv2.__version__)"  -> must print 5.0.0
+
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+aistudio_sdk==0.3.9
+annotated-types==0.8.0
+anyio==4.15.1
+attrs==26.1.0
+bce-python-sdk==0.9.79
+blinker==1.9.0
+certifi==2026.7.22
+cffi==2.1.1
+chardet==7.6.0
+charset-normalizer==3.5.1
+click==8.5.0
+cloudpickle==3.1.2
+colorlog==6.12.0
+contourpy==1.3.3
+crc32c==2.9
+cryptography==50.0.1
+cycler==0.12.1
 filelock==3.32.3
+fonttools==4.64.0
+frozenlist==1.8.0
 fsspec==2026.7.0
+future==1.0.0
+h11==0.16.0
+hf-xet==1.6.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==1.30.0
+idna==3.19
 ImageIO==2.37.4
+imagesize==2.0.1
+itsdangerous==2.2.0
 Jinja2==3.1.6
+kiwisolver==1.5.1
 lazy-loader==0.5
 MarkupSafe==3.0.3
+matplotlib==3.11.1
+modelscope==1.39.1
+modelscope-hub==0.4.0
 mpmath==1.3.0
+multidict==6.7.1
 networkx==3.6.1
-ninja==1.13.0
-numpy==2.5.2
+numpy==2.3.5
+nvidia-ml-py==13.610.43
+opencv-contrib-python==4.10.0.84
+opencv-python==5.0.0.93
 opencv-python-headless==5.0.0.93
+opt-einsum==3.3.0
 packaging==26.3
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+paddlex==3.7.2
+pandas==3.0.5
 pillow==12.3.0
+polars==1.44.1
+polars-runtime-32==1.44.1
+prettytable==3.18.0
+propcache==0.5.2
+protobuf==7.36.1
+psutil==7.2.2
+py-cpuinfo==9.0.0
 pyclipper==1.4.0
+pycparser==3.0
+pycryptodome==3.23.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+pyparsing==3.3.2
+pypdfium2==5.13.0
 python-bidi==0.6.11
-PyYAML==6.0.3
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+PyYAML==6.0.2
+requests==2.34.2
+ruamel.yaml==0.19.1
+safetensors==0.8.0
 scikit-image==0.26.0
 scipy==1.18.1
 setuptools==78.1.0
 shapely==2.1.2
+six==1.17.0
 sympy==1.14.0
 tifffile==2026.8.23
 torch==2.13.0+cpu
 torchvision==0.28.0+cpu
+tqdm==4.70.0
 typing_extensions==4.16.0
+typing-inspection==0.4.4
+ujson==6.0.0
+ultralytics==8.4.143
+ultralytics-platform==0.1.32
+ultralytics-thop==2.1.6
+urllib3==2.7.0
+wcwidth==0.8.3
+Werkzeug==3.1.8
+yarl==1.24.5
+
+# --- API de consultation + stockage MySQL (phases E/F) ---
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4
+PyMySQL==2.2.8

@@ -13,10 +13,10 @@ import sys
 
 import cv2
 
-from anpr_maroc.ocr.easyocr_reader import EasyOCRReader
+from anpr_maroc.ocr.paddleocr_reader import PaddleOCRReader
 
 
-def process_one(reader: EasyOCRReader, image_path: Path, segment: bool = False):
+def process_one(reader: PaddleOCRReader, image_path: Path, segment: bool = False):
     img = cv2.imread(str(image_path))
     if img is None:
         print(f"{image_path},,, ,False,0.0,ERROR:unreadable")
@@ -47,7 +47,7 @@ def main():
     parser.add_argument('--segment', action='store_true', help='Enable segmentation-based processing (try segmenter)')
     args = parser.parse_args()
 
-    reader = EasyOCRReader()
+    reader = PaddleOCRReader()
     # prefer segmentation path to avoid fallback to missing methods
     try:
         from anpr_maroc.processing.segmenter import segment_plate_by_layout
