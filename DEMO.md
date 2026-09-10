@@ -3,6 +3,20 @@
 Trois commandes, testées telles quelles le 2026-09-10 sur ce dépôt.
 Chacune est indépendante des deux autres.
 
+## Quelle commande pour quoi
+
+| Je veux… | Section | Commande |
+|---|---|---|
+| lire **une photo** | [A.1](#a1--lecture-sur-images-fixes) | `run_pipeline --image <fichier> --segment` |
+| lire **un dossier de photos** | [A.1](#a1--lecture-sur-images-fixes) | `run_pipeline --dir data/sample_plates --segment` |
+| voir le **détail** d'une photo + image annotée | [A.1](#a1--lecture-sur-images-fixes) | `test_pipeline --image <fichier>` |
+| la chaîne live **sans caméra** (vidéo enregistrée) | [A.2](#a2--chaîne-live-complète-sans-caméra) | `live_camera --source <video.mp4> --duration 45 --stats` |
+| **tester si la caméra répond** (5 s) | [B.1](#b1--vérifier-dabord-que-la-caméra-répond-5-s-à-faire-avant-de-présenter) | `test_rtsp_connection` |
+| la démo **avec la caméra en direct** | [B.2](#b2--lancer-la-démo-caméra) | `live_camera --duration 120 --stats` |
+| **toutes les options** de la démo caméra | [B.2](#toutes-les-options-de-live_camerapy) | tableau des 15 options |
+| **changer l'IP / les identifiants** de la caméra | [B.3](#b3--si-la-caméra-change-nouvelle-ip-nouveaux-identifiants-autre-modèle) | éditer `.env` |
+| consulter les **résultats stockés** | [C](#c-consultation-des-résultats-stockés-api--base) | `run_server --port 8000` |
+
 **Préalable commun à toutes les commandes** (une seule fois par terminal) :
 
 ```bash
@@ -41,6 +55,52 @@ n.jpeg,23242,أ,55,1,0.882,23242 أ 55
 À montrer : `3.png` et `5.jpg` sont **exacts sur les trois champs**. Les lignes
 à `?` sont le refus assumé de deviner (§4.1 du README), pas un plantage.
 
+#### Les options de la démo sur photo
+
+Deux scripts lisent une image. **Ils ne servent pas à la même chose** :
+
+| Script | Ce qu'il produit | Quand l'utiliser |
+|---|---|---|
+| `run_pipeline` | une **ligne CSV** par image, rien d'autre | montrer un **lot** d'images et des résultats chiffrés |
+| `test_pipeline` | le détail lisible + des **images annotées** sur disque | montrer **une** image et expliquer les étapes |
+
+**`run_pipeline` — 3 options :**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--image <fichier>` | — | traite **une** image |
+| `--dir <dossier>` | — | traite **toutes** les images d'un dossier |
+| `--segment` | désactivé | découpe la plaque en 3 zones (gauche / lettre / droite) avant de lire. **À garder** : sans lui la lecture est nettement moins bonne |
+
+```bash
+# Une seule image
+python -m anpr_maroc.scripts.run_pipeline --image data/sample_plates/3.png --segment
+
+# Tout un dossier (c'est la commande de démo ci-dessus)
+python -m anpr_maroc.scripts.run_pipeline --dir data/sample_plates --segment
+```
+
+**`test_pipeline` — 5 options :**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--image <fichier>` | — | l'image à traiter |
+| `--images <f1> <f2> …` | — | plusieurs images en série, séparées par des espaces |
+| `--conf <0-1>` | `0.15` | seuil de confiance YOLO. **Plus bas = détecte plus**, mais risque de fausses plaques. À baisser si une plaque n'est pas détectée |
+| `--model <fichier.pt>` | `models/plate_detector.pt` | autres poids de détection. Ne pas y toucher en démo |
+| `--output <dossier>` | `data/pipeline_output` | où sont écrites les images annotées |
+
+```bash
+# Le détail d'une image + l'image annotée sauvegardée
+python -m anpr_maroc.scripts.test_pipeline --image data/sample_plates/8.jpg
+
+# Plaque non détectée ? abaisser le seuil
+python -m anpr_maroc.scripts.test_pipeline --image data/sample_plates/cx.jpeg --conf 0.10
+
+# Plusieurs images d'affilée
+python -m anpr_maroc.scripts.test_pipeline --images data/sample_plates/3.png data/sample_plates/8.jpg
+```
+
 ### A.2 — Chaîne live complète, sans caméra
 
 Rejoue un clip vidéo dans **exactement** le même code que la caméra : YOLO,
@@ -74,6 +134,10 @@ Temps moyen / frame       : 1259.8 ms  ->  0.79 FPS
 C'est **la** commande de repli : visuellement identique à la démo caméra.
 Retirer `--no-display` pour afficher la fenêtre vidéo avec les boîtes YOLO.
 
+> C'est le **même script** que la démo caméra, donc **les mêmes options** :
+> le tableau complet est en [B.2](#toutes-les-options-de-live_camerapy). Seul
+> `--source` diffère — un fichier vidéo ici, l'URL RTSP là-bas.
+
 ---
 
 ## B. Démo AVEC caméra RTSP en direct
@@ -99,23 +163,99 @@ ECHEC FINAL: aucune des deux URLs n'a fonctionne.
 
 ### B.2 — Lancer la démo caméra
 
+La commande de base — c'est celle à taper le jour J :
+
 ```bash
 python -m anpr_maroc.scripts.live_camera --duration 120 --stats
 ```
 
-L'URL vient de `ANPR_RTSP_URL` dans `.env` (aucune URL en dur dans le code).
-Variantes utiles :
+L'URL vient de `ANPR_RTSP_URL` dans `.env` (aucune URL en dur dans le code, cf. B.3).
+
+#### Toutes les options de `live_camera.py`
+
+Le même script sert à la caméra, à la webcam et au fichier vidéo — seule
+l'option `--source` change. Les 15 options, groupées par usage :
+
+**D'où vient l'image**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--source <url\|0\|fichier>` | `$ANPR_RTSP_URL` (`.env`) | URL RTSP, index de webcam (`0`), ou fichier vidéo. **La seule option qui change la source** |
+| `--interval <secondes>` | `0` (au fil de l'eau) | attend N secondes entre deux frames traitées. Utile sur une machine lente : `--interval 0.5` |
+
+**Ce qui s'affiche à l'écran**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--no-display` | fenêtre affichée | **coupe la fenêtre vidéo**, tout passe dans le terminal. À utiliser si l'affichage plante ou en connexion SSH |
+| `--verbose` | silencieux | affiche le **détail** : lectures OCR brutes, plaques rejetées et pourquoi. Excellent pour expliquer au jury, bruyant sinon |
+| `--stats` | désactivé | affiche à l'arrêt le **rapport de performance** : FPS, temps moyen par frame, part YOLO vs OCR. **À garder pour la démo** |
+
+**Qualité de lecture — les réglages qui changent les résultats**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--conf <0-1>` | `0.25` | seuil de confiance **YOLO** (détecter la plaque). Plus bas = détecte plus de plaques, mais plus de fausses détections |
+| `--letter-threshold <0-1>` | `0.45` | seuil du **CNN de la lettre arabe**. Plus haut = plus prudent, la lettre devient `?` au lieu d'être devinée. `0.60` = mode prudent |
+| `--vote-window <N>` | `8` | nombre de frames gardées en mémoire par plaque suivie |
+| `--min-votes <N>` | `3` | nombre de frames **d'accord** exigées avant d'annoncer un matricule. Plus haut = plus fiable mais plus lent à s'afficher |
+| `--cooldown <secondes>` | `6` | délai avant de ré-annoncer **le même** matricule. Évite qu'une voiture à l'arrêt spamme l'écran |
+
+**Où vont les résultats**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--no-db` | insertion active | **n'écrit rien en base**. Pratique pour un essai sans polluer les données de démo |
+| `--save-dir <dossier>` | `data/pipeline_output/live` | dossier où sont sauvegardées les images des plaques validées |
+| `--post-url <url>` | `$ANPR_BACKEND_URL` | envoie les matricules validés à un backend HTTP. Non utilisé en démo |
+| `--auth-token <token>` | `$ANPR_AUTH_TOKEN` | jeton Bearer pour ce backend. Non utilisé en démo |
+
+**Quand ça s'arrête**
+
+| Option | Défaut | Ce qu'elle fait |
+|---|---|---|
+| `--duration <secondes>` | `0` = illimité | **arrêt automatique** après N secondes. `--duration 120` = 2 min, la durée d'une démo |
+
+> Sans `--duration`, le script tourne indéfiniment : l'arrêter avec **`Ctrl+C`**.
+> Le rapport `--stats` s'affiche dans les deux cas.
+
+#### Combinaisons prêtes à l'emploi
 
 ```bash
-# Sans fenêtre vidéo (terminal seul, si l'affichage pose problème)
+# ✅ LA commande de démo : 2 minutes, fenêtre vidéo, rapport de perfs à la fin
+python -m anpr_maroc.scripts.live_camera --duration 120 --stats
+
+# L'affichage pose problème (SSH, pas de serveur graphique) : terminal seul
 python -m anpr_maroc.scripts.live_camera --no-display --duration 120 --stats
 
-# Mode prudent : aucune lettre incertaine acceptée
-python -m anpr_maroc.scripts.live_camera --letter-threshold 0.60
+# Mode prudent : aucune lettre incertaine acceptée, on préfère '?' à une erreur
+python -m anpr_maroc.scripts.live_camera --letter-threshold 0.60 --duration 120 --stats
 
-# Webcam du portable au lieu de la caméra IP
-python -m anpr_maroc.scripts.live_camera --source 0
+# Mode explicatif : montrer au jury ce que le système rejette et pourquoi
+python -m anpr_maroc.scripts.live_camera --verbose --duration 60 --stats
+
+# Essai libre, sans rien écrire en base
+python -m anpr_maroc.scripts.live_camera --no-db --duration 60 --stats
+
+# La caméra IP est injoignable : basculer sur la webcam du portable
+python -m anpr_maroc.scripts.live_camera --source 0 --duration 60 --stats
+
+# Une plaque n'est pas détectée : abaisser le seuil YOLO
+python -m anpr_maroc.scripts.live_camera --conf 0.15 --duration 60 --stats
+
+# Machine lente : ne traiter qu'une frame toutes les 0,5 s
+python -m anpr_maroc.scripts.live_camera --interval 0.5 --duration 120 --stats
 ```
+
+> Toutes ces options **se cumulent** dans n'importe quel ordre. Rien n'est
+> obligatoire : `python -m anpr_maroc.scripts.live_camera` seul fonctionne, avec
+> les défauts du tableau. La liste complète est toujours disponible avec :
+>
+> ```bash
+> python -m anpr_maroc.scripts.live_camera --help
+> ```
+
+#### État de validation de la démo caméra
 
 > ⚠️ **État au 2026-09-10** : la caméra n'était **pas joignable**
 > depuis la machine de développement (`No route to host` — mauvais réseau, la
