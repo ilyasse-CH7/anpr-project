@@ -385,14 +385,24 @@ PaddlePaddle installée), et l'échantillonnage de frames (`--interval`).
 
 Python **3.12** est requis (PaddlePaddle ne fournit pas de wheel pour 3.14).
 
+**Git LFS est un prérequis, pas une option.** Les poids des modèles
+(`models/*.pt`, `yolov8n.pt`) et les images du jeu de données sont stockés via
+Git LFS. Un clone fait sans LFS installé récupère des **fichiers pointeurs de
+quelques centaines d'octets** à la place des poids, et le pipeline échoue au
+chargement du modèle.
+
 ```bash
+# 1. Installer Git LFS (une fois par machine)
+sudo apt-get install git-lfs      # Debian/Ubuntu
+sudo dnf install git-lfs          # Fedora/RHEL
+brew install git-lfs              # macOS
+git lfs install                   # active les filtres LFS pour l'utilisateur
+
+# 2. Cloner : les .pt sont alors rapatriés automatiquement
 git clone <url-du-depot> anpr-project
 cd anpr-project
 
-# Les modèles et images sont suivis par Git LFS
-git lfs install
-git lfs pull
-
+# 3. Environnement Python
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -400,6 +410,36 @@ python -m pip install -r requirements.txt
 
 cp .env.example .env      # puis renseigner l'URL RTSP et, si besoin, MySQL
 ```
+
+**Si le dépôt a déjà été cloné sans Git LFS**, rien n'est perdu — installer LFS
+puis rapatrier les fichiers dans le clone existant :
+
+```bash
+git lfs install
+git lfs pull                      # ou, pour les seuls modèles :
+git lfs pull --include="models/**,yolov8n.pt"
+```
+
+Vérifier que les poids sont réels et non des pointeurs :
+
+```bash
+git lfs ls-files              # doit lister les .pt
+ls -lh models/                # plate_detector.pt ≈ 6,0 Mo, pas ~130 octets
+```
+
+Poids suivis par LFS et nécessaires au pipeline :
+
+| Fichier | Taille | Rôle |
+|---|---|---|
+| `models/plate_detector.pt` | 6,0 Mo | détection YOLO de la plaque |
+| `models/arabic_letter_classifier_real2.pt` | 376 Ko | CNN lettre arabe — **modèle en production** |
+| `models/arabic_letter_classifier_ahcd.pt` | 389 Ko | backbone pré-entraîné, base du fine-tuning |
+| `yolov8n.pt` | 6,2 Mo | poids YOLOv8 amont |
+
+Les checkpoints intermédiaires de la comparaison Phase 3
+(`arabic_letter_classifier_finetuned.pt`, `arabic_letter_classifier_real.pt`) ne
+sont **pas** versionnés : ils ne servent qu'à re-jouer `evaluate_letter_models.py`
+et se régénèrent avec les scripts d'entraînement du dépôt.
 
 Toutes les commandes ci-dessous supposent :
 

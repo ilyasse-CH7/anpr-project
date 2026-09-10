@@ -3,9 +3,13 @@
 .env.local
 .env.*.local
 
-# Trained OCR weights are produced locally or by CI; keep the reproducible
-# extraction/training code and source crops under version control instead.
-models/*.pt
+# Poids du pipeline en production : suivis via Git LFS (voir .gitattributes),
+# pour qu'un clone frais soit directement exécutable.
+# Restent hors dépôt les poids intermédiaires de la comparaison Phase 3 :
+# ils ne servent qu'à re-jouer `evaluate_letter_models.py` et sont
+# régénérables par les scripts d'entraînement versionnés.
+models/arabic_letter_classifier_finetuned.pt
+models/arabic_letter_classifier_real.pt
 
 # Sorties d'entraînement Ultralytics (courbes, matrices de confusion) :
 # régénérées à chaque run, aucune valeur en revue de code.

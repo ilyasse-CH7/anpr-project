@@ -124,6 +124,136 @@ python -m anpr_maroc.scripts.live_camera --source 0
 > vérifié de bout en bout par A.2, qui emprunte le même code.
 > **À refaire une fois sur le bon réseau : lancer B.1 avant la présentation.**
 
+### B.3 — Si la caméra change (nouvelle IP, nouveaux identifiants, autre modèle)
+
+Question probable du jury : *« et si on remplace la caméra, vous refaites quoi ? »*
+Réponse courte : **on édite une ligne dans `.env`, et on relance le script. Rien
+d'autre.** Aucune URL, aucun mot de passe, aucune IP n'est écrit dans le code.
+
+#### Où vit la configuration caméra
+
+| Où | Quoi | Qui la lit |
+|---|---|---|
+| **`.env`**, variable **`ANPR_RTSP_URL`** | La source de vérité : URL RTSP complète, identifiants inclus | `live_camera.py` et `test_rtsp_connection.py` |
+| **`--source`** en ligne de commande | Surcharge ponctuelle, le temps d'un lancement | `live_camera.py` uniquement |
+| `.env`, `CAMERA_RTSP_URL` / `CAMERA_IP` / `RTSP_USER` / `RTSP_PASS` | Anciennes variables, utilisées seulement par le script de **collecte** `harvest_arabic_letters.py` | pas le pipeline de démo |
+
+`.env` est **volontairement hors du dépôt** (`.gitignore`) : il contient le mot de
+passe de la caméra. Le modèle à copier est `.env.example`, qui, lui, est versionné
+et ne contient que des valeurs factices.
+
+`--source` l'emporte sur `.env` quand les deux sont présents : c'est le `default`
+de l'argument qui vient de la variable d'environnement.
+
+```python
+# anpr_maroc/scripts/live_camera.py
+default_source = os.getenv("ANPR_RTSP_URL")
+parser.add_argument("--source", type=str, default=default_source, ...)
+```
+
+Si ni l'un ni l'autre n'est fourni, le script s'arrête avec un message explicite
+(« aucune source vidéo… ») — pas un traceback.
+
+#### Comment la modifier — méthode 1 : `.env` (le changement durable)
+
+Ouvrir `.env` à la racine du projet et modifier **une seule ligne** :
+
+```bash
+nano .env      # ou l'éditeur de votre choix
+```
+
+Avant :
+
+```dotenv
+ANPR_RTSP_URL=rtsp://admin:MotDePasse@192.168.100.55:554/Streaming/channels/101
+```
+
+Après (nouvelle caméra sur une autre IP) :
+
+```dotenv
+ANPR_RTSP_URL=rtsp://admin:MotDePasse@192.168.100.60:554/Streaming/channels/101
+```
+
+Anatomie de l'URL, pour savoir quelle partie toucher :
+
+```
+rtsp:// admin : MotDePasse @ 192.168.100.60 : 554 / Streaming/channels/101
+        ────    ──────────   ──────────────   ───  ─────────────────────────
+        user    mot de passe   IP caméra      port   chemin du flux (dépend
+                                                     de la marque de caméra)
+```
+
+- **L'IP change** → seul le bloc `192.168.100.xx` change.
+- **Les identifiants changent** → modifier `admin` et/ou `MotDePasse`.
+- **La caméra change de marque** → c'est le **chemin** qui change ; il est propre
+  au constructeur. Hikvision : `/Streaming/channels/101` ; Dahua :
+  `/cam/realmonitor?channel=1&subtype=0` ; Axis : `/axis-media/media.amp`.
+  Le chemin exact figure dans la doc de la caméra ou son interface web.
+- **Le mot de passe contient `@` ou `:`** → ne rien encoder à la main : les deux
+  scripts réessaient automatiquement la forme percent-encodée (`@` → `%40`).
+
+#### Comment la modifier — méthode 2 : `--source` (le temps d'un essai)
+
+Sans toucher à `.env`, pour tester une caméra le temps d'un lancement :
+
+```bash
+python -m anpr_maroc.scripts.live_camera \
+  --source "rtsp://admin:MotDePasse@192.168.100.60:554/Streaming/channels/101" \
+  --duration 120 --stats
+```
+
+> Mettre l'URL **entre guillemets** : sans eux, le shell interprète les caractères
+> spéciaux du mot de passe (`&`, `!`, `$`…).
+
+`--source` accepte aussi un index de webcam (`--source 0`) ou un fichier vidéo.
+
+#### Le changement est-il pris en compte immédiatement ?
+
+**Oui — au prochain lancement du script, et rien d'autre n'est à redémarrer.**
+
+`.env` est relu à chaque démarrage de `live_camera.py` (via `load_dotenv()`, au
+moment de l'import). Il n'y a **ni service en arrière-plan, ni cache, ni
+configuration compilée** à invalider.
+
+| Composant | À redémarrer après un changement d'IP caméra ? |
+|---|---|
+| `live_camera.py` | **Oui** — c'est le seul. Arrêter (`Ctrl+C`) puis relancer. |
+| Serveur API (`run_server`) | Non — il ne parle qu'à la base, jamais à la caméra. |
+| Base de données (MySQL/SQLite) | Non. |
+| Le venv, les modèles `.pt` | Non — sans rapport avec la caméra. |
+
+Seule nuance : un terminal déjà ouvert **avant** l'édition de `.env` garde
+l'ancienne valeur si elle avait été exportée à la main (`export ANPR_RTSP_URL=…`) —
+une variable exportée dans le shell est prioritaire sur le fichier. En pratique on
+n'exporte pas cette variable ; en cas de doute, ouvrir un terminal neuf.
+
+#### Exemple concret complet : l'IP passe de `192.168.100.55` à `192.168.100.60`
+
+```bash
+cd ~/PycharmProjects/anpr-project
+
+# 1. Éditer la seule ligne concernée (ici en une commande, sed fait le
+#    remplacement ; sinon ouvrir .env dans un éditeur et changer l'IP)
+sed -i 's/192\.168\.100\.55/192.168.100.60/' .env
+
+# 2. Vérifier que la ligne est correcte (le mot de passe reste visible : ne pas
+#    projeter cette sortie devant un public)
+grep ANPR_RTSP_URL .env
+
+# 3. Vérifier que la nouvelle caméra répond — 5 secondes
+source .venv/bin/activate && export PYTHONPATH=$PWD
+python -m anpr_maroc.scripts.test_rtsp_connection
+
+# 4. Si B.1 est au vert, relancer la démo. C'est tout.
+python -m anpr_maroc.scripts.live_camera --duration 120 --stats
+```
+
+Si l'étape 3 échoue alors que l'URL est juste, le problème n'est pas dans le
+projet mais dans le réseau : la machine doit être **sur le même réseau / VLAN** que
+la caméra. À vérifier dans l'ordre : `ping 192.168.100.60`, puis le port RTSP
+(`nc -vz 192.168.100.60 554`), puis les identifiants (une erreur 401 dans la sortie
+de B.1 signifie que le réseau est bon et que seul le mot de passe est faux).
+
 ---
 
 ## C. Consultation des résultats stockés (API / base)
