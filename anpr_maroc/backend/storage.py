@@ -165,7 +165,7 @@ class PlateStore:
         limit = max(1, min(int(limit), 1000))
         sql = (
             "SELECT id, matricule, confiance, timestamp, chemin_image_crop "
-            f"FROM plates ORDER BY id DESC LIMIT {limit}"
+            f"FROM plates ORDER BY timestamp DESC LIMIT {limit}"
         )
         if self.active_backend == "mysql":
             with self.conn.cursor() as cur:
