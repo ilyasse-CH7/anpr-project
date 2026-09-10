@@ -386,7 +386,7 @@ PaddlePaddle installée), et l'échantillonnage de frames (`--interval`).
 Python **3.12** est requis (PaddlePaddle ne fournit pas de wheel pour 3.14).
 
 **Git LFS est un prérequis, pas une option.** Les poids des modèles
-(`models/*.pt`, `yolov8n.pt`) et les images du jeu de données sont stockés via
+(`models/*.pt`) et les images du jeu de données sont stockés via
 Git LFS. Un clone fait sans LFS installé récupère des **fichiers pointeurs de
 quelques centaines d'octets** à la place des poids, et le pipeline échoue au
 chargement du modèle.
@@ -417,7 +417,7 @@ puis rapatrier les fichiers dans le clone existant :
 ```bash
 git lfs install
 git lfs pull                      # ou, pour les seuls modèles :
-git lfs pull --include="models/**,yolov8n.pt"
+git lfs pull --include="models/**"
 ```
 
 Vérifier que les poids sont réels et non des pointeurs :
@@ -427,14 +427,14 @@ git lfs ls-files              # doit lister les .pt
 ls -lh models/                # plate_detector.pt ≈ 6,0 Mo, pas ~130 octets
 ```
 
-Poids suivis par LFS et nécessaires au pipeline :
+Poids suivis par LFS :
 
 | Fichier | Taille | Rôle |
 |---|---|---|
-| `models/plate_detector.pt` | 6,0 Mo | détection YOLO de la plaque |
+| `models/plate_detector.pt` | 6,0 Mo | détection YOLO de la plaque — **requis** |
 | `models/arabic_letter_classifier_real2.pt` | 376 Ko | CNN lettre arabe — **modèle en production** |
 | `models/arabic_letter_classifier_ahcd.pt` | 389 Ko | backbone pré-entraîné, base du fine-tuning |
-| `yolov8n.pt` | 6,2 Mo | poids YOLOv8 amont |
+| `yolov8n.pt` (racine) | 6,2 Mo | poids COCO génériques, déposés par Ultralytics ; **aucun code du projet ne les charge** — `plate_detector.pt` en est le fine-tuning |
 
 Les checkpoints intermédiaires de la comparaison Phase 3
 (`arabic_letter_classifier_finetuned.pt`, `arabic_letter_classifier_real.pt`) ne
