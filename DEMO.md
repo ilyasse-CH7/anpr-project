@@ -87,7 +87,7 @@ python -m anpr_maroc.scripts.test_rtsp_connection
 Si la caméra est injoignable, la sortie est explicite et sans traceback :
 
 ```
---- Trying URL brute (mot de passe avec '@' litteral): rtsp://***:***@192.168.100.55:554/... ---
+--- Trying URL brute (mot de passe avec '@' litteral): rtsp://***:***@<ip-camera>:554/... ---
 ECHEC: cannot open stream (backend=aucun (le flux n'a jamais ete ouvert)); likely
 causes: host unreachable (mauvais reseau/VLAN), timeout, RTSP 401 (auth), ...
 
@@ -117,7 +117,7 @@ python -m anpr_maroc.scripts.live_camera --letter-threshold 0.60
 python -m anpr_maroc.scripts.live_camera --source 0
 ```
 
-> ⚠️ **État au 2026-09-10** : la caméra `192.168.100.55` n'était **pas joignable**
+> ⚠️ **État au 2026-09-10** : la caméra n'était **pas joignable**
 > depuis la machine de développement (`No route to host` — mauvais réseau, la
 > machine n'était pas sur le VLAN de la caméra). La commande B.2 n'a donc pas pu
 > être validée en conditions réelles ce soir. Le reste de la chaîne, lui, est
