@@ -23,7 +23,12 @@ except ImportError:  # Makes importing the OCR package safe without torch.
 
 
 IMAGE_SIZE = 96
-DEFAULT_MODEL_PATH = Path("models/arabic_letter_classifier_finetuned.pt")
+# Le modèle par défaut est celui retenu en phase 4 sur le jeu de test scellé
+# (docs/arabic_letter_model.md §6) : sur une zone lettre correctement cadrée il
+# lit juste 16/22 = 0.727, contre 8/22 pour l'ancien 3-classes, et sa confiance
+# est enfin plus haute quand il a raison que quand il se trompe. Il couvre
+# أ/ب/د et abandonne ه : mesuré, l'ancien modèle ne lisait pas ه non plus.
+DEFAULT_MODEL_PATH = Path("models/arabic_letter_classifier_real2.pt")
 
 
 def preprocess_letter(image: np.ndarray, size: int = IMAGE_SIZE) -> np.ndarray:

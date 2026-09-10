@@ -37,8 +37,10 @@ import typing as t
 from dataclasses import dataclass
 
 # Lettres de série admises sur une plaque marocaine.
-# NOTE : le classifieur CNN embarqué (models/arabic_letter_classifier_finetuned.pt)
-# ne connaît aujourd'hui qu'un sous-ensemble de ces lettres ('أ', 'ب', 'ه').
+# NOTE : le classifieur CNN embarqué (models/arabic_letter_classifier_real2.pt)
+# ne connaît aujourd'hui qu'un sous-ensemble de ces lettres ('أ', 'ب', 'د') :
+# ce sont les seules pour lesquelles le jeu réel atteint l'effectif minimal
+# (docs/arabic_letter_model.md §2). Toute autre lettre ressort en sentinelle.
 # Le validateur reste volontairement plus large pour ne pas devenir le facteur
 # limitant le jour où le CNN est ré-entraîné sur l'alphabet complet.
 MOROCCAN_PLATE_LETTERS = "أابتجدهوطشمق"

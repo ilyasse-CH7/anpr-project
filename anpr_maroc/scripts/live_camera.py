@@ -64,19 +64,29 @@ PENDING_FILE = Path("data/pipeline_output/pending_posts.jsonl")
 
 # --- Phase A : seuil CNN lettre -------------------------------------------
 #
-# Le seuil historique de 0.75 rejetait systématiquement des lectures correctes
-# sur les plaques de test imprimées basse résolution (score CNN observé
-# ~0.60-0.62 alors que la lettre était juste). Le défaut est donc abaissé à
-# 0.55.
+# Valeurs recalibrées en phase 4 sur le modèle reel v2, à partir du balayage de
+# `calibrate_letter_threshold` (docs/arabic_letter_model.md §6.3). Les anciennes
+# (0.55 / 0.75) avaient été réglées à l'œil sur l'ancien modèle 3-classes, dont
+# la confiance était de toute façon inexploitable : il était plus sûr de lui
+# quand il se trompait.
 #
-# Garde-fou : ce niveau de confiance N'EST JAMAIS suffisant sur une seule
-# frame. Il n'est autorisé que combiné au vote multi-frames (phase C) — au
-# moins MIN_VOTES_FOR_LOW_THRESHOLD frames concordantes sur la même plaque
-# suivie. Si l'utilisateur désactive ou réduit le vote sous ce plancher, le
-# seuil est automatiquement remonté à SAFE_LETTER_THRESHOLD : on n'accepte pas
-# une lecture 0.55 non confirmée.
-LOW_LETTER_THRESHOLD = 0.55
-SAFE_LETTER_THRESHOLD = 0.75
+# Le balayage sur la validation donne un résultat qu'il faut énoncer tel quel :
+# la précision plafonne à 0.364 quel que soit le seuil. Monter le seuil
+# n'achète PAS de la précision, il éteint le modèle — au-delà de 0.50, ب et د
+# ne sont plus jamais émis et il ne reste qu'un détecteur de أ.
+#
+# 0.45 est donc le point de fonctionnement mesuré : exactitude quasi maximale
+# (0.655 en validation) avec les trois lettres encore vivantes.
+#
+# Garde-fou conservé : ce niveau N'EST JAMAIS suffisant sur une seule frame. Il
+# n'est autorisé que combiné au vote multi-frames (phase C) — au moins
+# MIN_VOTES_FOR_LOW_THRESHOLD frames concordantes sur la même plaque suivie. Si
+# l'utilisateur réduit le vote sous ce plancher, le seuil est remonté à
+# SAFE_LETTER_THRESHOLD : 0.60 n'est pas plus précis (la précision est plate),
+# mais il émet deux fois moins de lettres, donc deux fois moins de lectures
+# inventées quand rien ne vient les confirmer.
+LOW_LETTER_THRESHOLD = 0.45
+SAFE_LETTER_THRESHOLD = 0.60
 MIN_VOTES_FOR_LOW_THRESHOLD = 3
 
 VERBOSE = False

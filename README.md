@@ -235,26 +235,87 @@ Ces limites sont assumées et documentées ; elles ne relèvent pas de bugs.
 
 ### 4.1 Couverture de l'alphabet du CNN lettre — limite principale
 
-Le modèle chargé par défaut (`models/arabic_letter_classifier_finetuned.pt`) ne
-connaît que **3 classes : `أ`, `ب`, `ه`**. Il a été affiné sur les seuls crops de
-plaques réelles annotés à ce jour (`data/arabic_letters/real/`, 4 images).
+Le modèle chargé par défaut est `models/arabic_letter_classifier_real2.pt`.
+Il connaît **3 lettres — `أ`, `ب`, `د` — plus une classe de rejet** (`autre`).
+Toutes les valeurs ci-dessous sont **mesurées** sur un jeu de test scellé de
+74 images ouvert une seule fois ; la méthode complète est dans
+[`docs/arabic_letter_model.md`](docs/arabic_letter_model.md).
 
-**Conséquence directe et importante :** toute plaque portant une autre lettre
-(`د`, `ح`, `و`, `ط`, `م`…) est *structurellement* illisible. Le modèle ne renvoie
-pas « je ne sais pas » — il renvoie la moins improbable de ses 3 classes, avec un
-score d'apparence honorable (~0.60). **Une lecture confiante mais fausse est plus
-dangereuse qu'une absence de lecture.**
+**Pourquoi seulement 3 lettres.** Les 434 plaques réelles disponibles ne
+contiennent que 6 lettres distinctes. Après annotation manuelle des 317 crops
+exploitables, seules `أ` (42), `د` (23) et `ب` (21) atteignent l'effectif
+minimal fixé *avant* de regarder les données. `ه` (10) et `و` (9) sont sous le
+seuil et ont été écartés — délibérément, plutôt que d'entraîner un modèle dont
+on ne pourrait pas mesurer la fiabilité.
 
-**Atténuation en place — la lettre indéterminée.** En dessous du seuil de
-confiance, le système n'invente plus de lettre : il émet le sentinelle `?` et
-annonce la lecture comme partielle.
+#### Précision réelle, par lettre
+
+Sur une **zone lettre correctement cadrée** (22 images de test) :
+
+| Lettre | Justes / total | Taux |
+|---|---|---|
+| `أ` | 9 / 11 | 0.818 |
+| `ب` | 3 / 5 | 0.600 |
+| `د` | 4 / 6 | 0.667 |
+| **Total** | **16 / 22** | **0.727** |
+
+Sur l'**ensemble du jeu de test** (74 images, dont 52 zones mal segmentées),
+au seuil de production 0.45 : précision 0.382, rappel 0.650.
+
+L'écart entre ces deux chiffres est le point important : **l'erreur dominante
+n'est pas une confusion entre lettres, c'est une zone mal découpée lue comme
+une lettre.** Le maillon faible mesuré est la segmentation, pas le CNN.
+
+⚠️ **Effectifs minuscules : 5 à 11 images par lettre.** Ces taux ont des marges
+d'erreur de ±20 à ±40 points et ne départagent pas les lettres entre elles.
+Ils donnent un ordre de grandeur, pas une mesure fine.
+
+À titre de comparaison, l'ancien modèle 3 classes obtenait **8/22 (0.364)** sur
+les mêmes images, et se trompait sur 100 % des `ب` et des `د`.
+
+#### Le seuil de confiance fonctionne — enfin
+
+L'ancien modèle avait un défaut disqualifiant : **sa confiance était plus haute
+quand il se trompait (0.625) que quand il avait raison (0.591)**. Un seuil
+appliqué à ce modèle ne filtrait pas les erreurs, il les sélectionnait.
+
+Le modèle actuel remet le rapport dans le bon sens : **0.541 quand il a raison,
+0.492 quand il se trompe.** La marge reste faible — le seuil trie utilement
+mais grossièrement.
+
+Le seuil retenu est **0.45**, calibré sur la validation et jamais sur le test.
+Le balayage donne un résultat qu'il faut énoncer tel quel : **la précision
+plafonne à 0.364 quel que soit le seuil.** Monter le seuil n'achète pas de la
+précision, il éteint le modèle — au-delà de 0.50, `ب` et `د` ne sont plus
+jamais émis et il ne reste qu'un détecteur de `أ`.
+
+#### Ce qui se passe sur une lettre non couverte
+
+**C'est la limite à connaître avant toute démonstration.** Sur une plaque
+portant `ه`, `و`, `ط`, `م`… le modèle ne répond pas « je ne sais pas » : il
+répond la moins improbable de ses 3 lettres. Vérifié sur les images de test :
+
+| Image | Vérité | Lu | Résultat |
+|---|---|---|---|
+| `3.png` | 13456-**ب**-27 | 13456-**ب**-27 | ✅ exact |
+| `5.jpg` | 62407-**أ**-34 | 62407-**أ**-34 | ✅ exact |
+| `8.jpg` | 60567-**ه**-6 | 60567-**د**-6 | ❌ lettre substituée |
+| `cx.jpeg` | 12345-**ه**-72 | 12345-**د**-72 | ❌ lettre substituée |
+
+Les **chiffres sont justes sur les 4** ; les deux échecs portent exactement sur
+la lettre `ه`, non couverte. La substitution passe le seuil et ressort comme
+une lecture valide : **le système ne signale pas cette erreur-là**.
+
+**Atténuation en place — la lettre indéterminée.** Quand la confiance est
+insuffisante, ou quand le modèle répond sa classe de rejet `autre`, le système
+n'invente pas de lettre : il émet le sentinelle `?`.
 
 ```
-[14:32:07] Plaque détectée : 13456-ب-27
+[14:32:07] Plaque détectée  : 13456-ب-27
 [14:32:19] Plaque partielle : 60567-?-6  (lettre indéterminée)
 ```
 
-Le validateur distingue alors trois états, et non plus deux :
+Le validateur distingue trois états, et non deux :
 
 | État | `valid` | `letter_known` | Signification |
 |---|---|---|---|
@@ -262,38 +323,38 @@ Le validateur distingue alors trois états, et non plus deux :
 | **Lecture partielle** | `False` | `False` | chiffres sûrs, lettre inconnue |
 | Rejet | `False` | `True` | lecture aberrante, jetée |
 
-Un appelant qui ne teste que `valid` conserve l'ancien comportement : il ne peut
-pas stocker par inadvertance une lettre incertaine.
+Un appelant qui ne teste que `valid` ne peut pas stocker par inadvertance une
+lettre incertaine. Ce filet couvre l'incertitude du modèle — il ne couvre
+**pas** la substitution d'une lettre non couverte décrite ci-dessus.
 
-⚠️ **Cette atténuation dépend entièrement du seuil**, et le seuil live par défaut
-est bas (`0.55`, abaissé volontairement pour le vote multi-frames, cf. §3.5). Sur
-une plaque `د`, le CNN 3 classes sort une lettre fausse à ~0.61 : au-dessus de
-0.55, donc **acceptée à tort**. La confiance ne
-porte aucun signal exploitable dans ce cas précis. Pour une démo où la prudence
-prime sur le taux de lecture, forcer le seuil sûr :
+En live, le seuil bas n'est jamais accepté sur une seule frame : il exige
+`--min-votes` frames concordantes, sinon il est automatiquement remonté à 0.60
+(cf. §3.5). Pour une démonstration où la prudence prime sur le taux de lecture :
 
 ```bash
-python -m anpr_maroc.scripts.live_camera --letter-threshold 0.75
+python -m anpr_maroc.scripts.live_camera --letter-threshold 0.60
 ```
 
-Un second modèle existe, `models/arabic_letter_classifier_ahcd.pt`, entraîné sur
-les **28 lettres** de l'alphabet arabe à partir du dataset AHCD (*Arabic
-Handwritten Characters Dataset*, ~600 images/classe dans
-`data/arabic_letters/raw/`). Il couvre bien `د`, mais avec une confiance très
-basse (0.20-0.23 mesurée sur des crops de plaques réelles) : il a été entraîné
-sur de l'**écriture manuscrite**, alors que les plaques portent des glyphes
-**imprimés**. C'est un décalage de domaine (*domain shift*) classique. Il n'est
-donc pas activé par défaut.
+Deux autres modèles restent chargeables via `ANPR_ARABIC_LETTER_MODEL`, tous
+deux mesurés moins bons sur le jeu de test : `..._finetuned.pt` (3 classes,
+rappel macro 0.178) et `..._ahcd.pt` (28 classes, rappel macro 0.307). Ce
+dernier couvre tout l'alphabet mais est entraîné sur de l'écriture
+**manuscrite** quand les plaques portent des glyphes **imprimés** — décalage de
+domaine classique, et il souffre du même défaut de confiance inversée
+(0.473 juste / 0.624 faux).
 
-Le validateur (`MOROCCAN_PLATE_LETTERS`) accepte volontairement un alphabet plus
-large que le CNN, pour ne pas devenir le facteur limitant le jour où le CNN sera
-ré-entraîné.
+Le validateur (`MOROCCAN_PLATE_LETTERS`) accepte volontairement un alphabet
+plus large que le CNN, pour ne pas devenir le facteur limitant le jour où le
+CNN sera ré-entraîné.
 
 ### 4.2 Performance
 
-~0.38 FPS mesuré en traitement complet sur CPU (≈ 2,6 s par frame). Suffisant
-pour un portail ou une barrière où les véhicules marquent l'arrêt, insuffisant
-pour de la voie rapide. Leviers non exploités : GPU (`--gpu`), oneDNN/MKL-DNN
+**0.79 FPS mesuré** en traitement complet sur CPU (1 260 ms par frame : 241 ms
+de détection YOLO, 1 016 ms d'OCR+CNN). Mesure relevée sur un run de 45 s,
+36 frames, via `--stats`.
+
+Suffisant pour un portail ou une barrière où les véhicules marquent l'arrêt,
+insuffisant pour de la voie rapide. Leviers non exploités : GPU, oneDNN/MKL-DNN
 (désactivé car il déclenche une `NotImplementedError` sur la version CPU de
 PaddlePaddle installée), et l'échantillonnage de frames (`--interval`).
 
@@ -405,7 +466,11 @@ python -m anpr_maroc.scripts.live_camera --source 0
 python -m anpr_maroc.scripts.live_camera --no-display --no-db
 
 # Mode prudent : seuil CNN sûr, aucune lettre incertaine acceptée (cf. §4.1)
-python -m anpr_maroc.scripts.live_camera --no-display --letter-threshold 0.75
+python -m anpr_maroc.scripts.live_camera --no-display --letter-threshold 0.60
+
+# Démo sans caméra : rejoue un clip vidéo dans la chaîne live complète
+python -m anpr_maroc.scripts.live_camera --source data/sample_plates/demo_clip.mp4 \
+  --no-display --duration 45 --stats
 ```
 
 Le terminal n'affiche **que** les lectures confirmées par le vote :

@@ -50,8 +50,21 @@ def percent_encode_userinfo(url: str) -> str:
 
 
 def describe_open_failure(cap: cv2.VideoCapture) -> str:
-    backend = cap.getBackendName() if cap is not None else "unknown"
-    return f"cannot open stream (backend={backend}); likely causes: timeout, RTSP 401 (auth), 404 (bad path), or FFmpeg/OpenCV build missing RTSP support"
+    """Describe why a capture would not open, without adding a second failure.
+
+    ``getBackendName()`` asserts (``api != 0``) when the capture never bound a
+    backend at all — precisely the case here, since we only ask once the open
+    has failed. Calling it unguarded turned a clean "camera unreachable" into a
+    cv2.error traceback that aborted the run before the percent-encoded URL was
+    ever tried; the fallback existed but was unreachable in practice.
+    """
+    try:
+        backend = cap.getBackendName() if cap is not None else "unknown"
+    except cv2.error:
+        backend = "aucun (le flux n'a jamais ete ouvert)"
+    return (f"cannot open stream (backend={backend}); likely causes: host unreachable "
+            f"(mauvais reseau/VLAN), timeout, RTSP 401 (auth), 404 (bad path), or "
+            f"FFmpeg/OpenCV build missing RTSP support")
 
 
 def mask_credentials(url: str) -> str:

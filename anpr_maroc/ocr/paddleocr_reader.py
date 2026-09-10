@@ -12,6 +12,11 @@ from anpr_maroc.processing.validator import UNKNOWN_LETTER
 
 DIGITS_RE = re.compile(r"\D")
 
+# Nom de la classe de rejet du classifieur de lettres : le modèle répond
+# ceci quand le crop n'est pas un glyphe exploitable (cadre, chiffre,
+# fragment). Ce n'est jamais une lecture.
+LETTER_REJECT_CLASS = "autre"
+
 
 class PaddleOCRReader:
     """PaddleOCR wrapper that accepts file paths or numpy images and returns
@@ -27,7 +32,11 @@ class PaddleOCRReader:
     """
 
     ARABIC_RE = re.compile(r"[؀-ۿ]")
-    ARABIC_LETTER_SET = "ابتثجحخسشصضطظعغفقكلمنهوياءئؤةأآإ"
+    # د/ذ/ر/ز manquaient à cette liste : un bloc contigu de l'alphabet
+    # oublié à la saisie. Sans eux, toute lecture "د" — une des trois
+    # lettres que le CNN sait lire — ressortait valid=False alors qu'elle
+    # était juste. Vérifié contre l'alphabet complet, plus aucun trou.
+    ARABIC_LETTER_SET = "ابتثجحخدذرزسشصضطظعغفقكلمنهوياءئؤةأآإ"
     MATRICULE_RE = re.compile(r"(?P<left>\d{1,6})\s*[-\s]?\s*(?P<letter>[؀-ۿ])\s*[-\s]?\s*(?P<right>\d{1,6})")
 
     def __init__(
@@ -36,7 +45,7 @@ class PaddleOCRReader:
         gpu: bool = False,
         conf_threshold: float = 0.3,
         letter_model_path: t.Optional[str] = None,
-        letter_model_threshold: float = 0.65,
+        letter_model_threshold: float = 0.45,
         enable_mkldnn: bool = False,
     ):
         """Initialize reader.
@@ -186,11 +195,27 @@ class PaddleOCRReader:
                 if os.getenv("ANPR_DEBUG"):
                     print(f"[DEBUG] arabic_letter_model -> '{model_letter}' (conf={model_confidence:.3f})")
                 # Sous le seuil, on n'émet PAS la classe la moins improbable :
-                # le CNN ne couvre qu'une partie de l'alphabet (README §4.1) et
-                # sort alors une lettre fausse avec une confiance d'apparence
-                # honorable (~0.60 mesuré). Le sentinelle rend l'incertitude
-                # visible en aval au lieu de la déguiser en lecture sûre.
-                letter_known = bool(model_letter) and model_confidence >= self.letter_model_threshold
+                # le CNN ne couvre que أ/ب/د (README §4.1) et sort sinon une
+                # lettre fausse. Le sentinelle rend l'incertitude visible en
+                # aval au lieu de la déguiser en lecture sûre.
+                #
+                # Seuil 0.45 : calibré sur la validation, jamais sur le test
+                # (docs/arabic_letter_model.md §6.3). Le balayage montre que la
+                # précision plafonne à 0.364 quel que soit le seuil — monter le
+                # seuil n'achète pas de la précision, il éteint le modèle
+                # (au-delà de 0.50, ب et د ne sont plus jamais émis). 0.45 est
+                # le point où l'exactitude est quasi maximale avec les trois
+                # lettres encore vivantes.
+                # `autre` est la classe de REJET du modèle, pas une lettre : la
+                # laisser passer écrivait littéralement "autre" dans le
+                # matricule. L'ancien modèle 3-classes n'avait pas cette classe,
+                # d'où l'absence du test jusqu'ici.
+                is_reject = model_letter == LETTER_REJECT_CLASS
+                letter_known = (
+                    bool(model_letter)
+                    and not is_reject
+                    and model_confidence >= self.letter_model_threshold
+                )
                 out.append(
                     {
                         "zone": name,
