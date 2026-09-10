@@ -349,9 +349,11 @@ CNN sera ré-entraîné.
 
 ### 4.2 Performance
 
-**0.79 FPS mesuré** en traitement complet sur CPU (1 260 ms par frame : 241 ms
-de détection YOLO, 1 016 ms d'OCR+CNN). Mesure relevée sur un run de 45 s,
-36 frames, via `--stats`.
+**0,6 à 0,8 FPS mesuré** en traitement complet sur CPU, soit 1,3 à 1,7 s par
+frame. Deux runs de 45 s via `--stats` donnent 0.79 FPS (1 260 ms : 241 ms YOLO
++ 1 016 ms OCR/CNN) et 0.59 FPS (1 691 ms : 322 ms YOLO + 1 366 ms OCR/CNN).
+L'écart entre les deux vient de la charge de la machine, pas du pipeline : il
+faut donc citer la fourchette, pas un chiffre unique.
 
 Suffisant pour un portail ou une barrière où les véhicules marquent l'arrêt,
 insuffisant pour de la voie rapide. Leviers non exploités : GPU, oneDNN/MKL-DNN
