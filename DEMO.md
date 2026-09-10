@@ -127,20 +127,41 @@ python -m anpr_maroc.scripts.live_camera --source 0
 ### B.3 — Si la caméra change (nouvelle IP, nouveaux identifiants, autre modèle)
 
 Question probable du jury : *« et si on remplace la caméra, vous refaites quoi ? »*
-Réponse courte : **on édite une ligne dans `.env`, et on relance le script. Rien
-d'autre.** Aucune URL, aucun mot de passe, aucune IP n'est écrit dans le code.
+Réponse courte : **on édite `.env`, et on relance le script. Rien d'autre.**
+Aucune URL, aucun mot de passe, aucune IP n'est écrit dans le code.
 
 #### Où vit la configuration caméra
 
-| Où | Quoi | Qui la lit |
+**Un seul fichier est à modifier : `.env`, à la racine du projet.** Aucune adresse
+IP, aucun identifiant de la caméra réelle n'existe ailleurs dans le projet.
+
+Inventaire exhaustif des lignes de `.env` qui décrivent la caméra :
+
+| Ligne de `.env` | Contenu | Qui la lit | À changer si l'IP change ? |
+|---|---|---|---|
+| `ANPR_RTSP_URL=` | URL RTSP complète, identifiants inclus | `live_camera.py`, `test_rtsp_connection.py` — **la démo** | **Oui** |
+| `CAMERA_RTSP_URL=` | même URL, dupliquée | `harvest_arabic_letters.py` (collecte de données) | **Oui** |
+| `CAMERA_IP=` | IP seule | idem, en repli si `CAMERA_RTSP_URL` est vide | **Oui** |
+| `RTSP_USER=` / `RTSP_PASS=` | identifiants séparés | idem, en repli | seulement si les identifiants changent |
+
+> ⚠️ L'IP figure donc **trois fois** dans `.env` (`ANPR_RTSP_URL`,
+> `CAMERA_RTSP_URL`, `CAMERA_IP`). Pour la démo seule, `ANPR_RTSP_URL` suffit —
+> mais changer les trois évite qu'un script de collecte lancé plus tard vise
+> l'ancienne caméra.
+
+Et en dehors de `.env` :
+
+| Où | Quoi | Faut-il y toucher ? |
 |---|---|---|
-| **`.env`**, variable **`ANPR_RTSP_URL`** | La source de vérité : URL RTSP complète, identifiants inclus | `live_camera.py` et `test_rtsp_connection.py` |
-| **`--source`** en ligne de commande | Surcharge ponctuelle, le temps d'un lancement | `live_camera.py` uniquement |
-| `.env`, `CAMERA_RTSP_URL` / `CAMERA_IP` / `RTSP_USER` / `RTSP_PASS` | Anciennes variables, utilisées seulement par le script de **collecte** `harvest_arabic_letters.py` | pas le pipeline de démo |
+| `--source` en ligne de commande | surcharge ponctuelle de `ANPR_RTSP_URL`, le temps d'un lancement | non, c'est un choix au lancement |
+| `--ip` / `--user` / `--password` / `--port` / `--channel` | mêmes surcharges pour `harvest_arabic_letters.py` | non |
+| `.env.example` | modèle versionné, valeurs **factices** (`192.168.1.100`, `USER`/`PASS`) | non — il ne sert qu'à créer un `.env` neuf |
+| `harvest_arabic_letters.py`, docstring en tête | `192.168.1.64` dans un **exemple d'usage en commentaire** | non — jamais exécuté |
+| Le reste du code (`live_camera.py`, `plate_detector.py`, `config.py`…) | lisent des variables d'environnement, aucune valeur en dur | non |
 
 `.env` est **volontairement hors du dépôt** (`.gitignore`) : il contient le mot de
-passe de la caméra. Le modèle à copier est `.env.example`, qui, lui, est versionné
-et ne contient que des valeurs factices.
+passe de la caméra. C'est aussi pourquoi il n'existe pas après un clone — il faut
+le créer avec `cp .env.example .env`.
 
 `--source` l'emporte sur `.env` quand les deux sont présents : c'est le `default`
 de l'argument qui vient de la variable d'environnement.
@@ -156,7 +177,9 @@ Si ni l'un ni l'autre n'est fourni, le script s'arrête avec un message explicit
 
 #### Comment la modifier — méthode 1 : `.env` (le changement durable)
 
-Ouvrir `.env` à la racine du projet et modifier **une seule ligne** :
+Ouvrir `.env` à la racine du projet. Pour la démo, **une seule ligne compte** :
+`ANPR_RTSP_URL` (voir le tableau ci-dessus pour les deux autres, utilisées par le
+script de collecte).
 
 ```bash
 nano .env      # ou l'éditeur de votre choix
@@ -232,13 +255,15 @@ n'exporte pas cette variable ; en cas de doute, ouvrir un terminal neuf.
 ```bash
 cd ~/PycharmProjects/anpr-project
 
-# 1. Éditer la seule ligne concernée (ici en une commande, sed fait le
-#    remplacement ; sinon ouvrir .env dans un éditeur et changer l'IP)
+# 1. Remplacer l'ancienne IP par la nouvelle. sed traite les trois lignes
+#    concernées d'un coup (ANPR_RTSP_URL, CAMERA_RTSP_URL, CAMERA_IP).
+#    Sinon : ouvrir .env dans un éditeur et changer l'IP à la main.
 sed -i 's/192\.168\.100\.55/192.168.100.60/' .env
 
-# 2. Vérifier que la ligne est correcte (le mot de passe reste visible : ne pas
-#    projeter cette sortie devant un public)
-grep ANPR_RTSP_URL .env
+# 2. Vérifier le résultat — plus aucune occurrence de l'ancienne IP ne doit
+#    subsister. Le mot de passe apparaît en clair : ne pas projeter cette
+#    sortie devant un public.
+grep -nE 'ANPR_RTSP_URL|CAMERA_RTSP_URL|CAMERA_IP' .env
 
 # 3. Vérifier que la nouvelle caméra répond — 5 secondes
 source .venv/bin/activate && export PYTHONPATH=$PWD
