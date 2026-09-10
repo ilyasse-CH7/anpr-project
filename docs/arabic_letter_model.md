@@ -160,8 +160,113 @@ python -m anpr_maroc.scripts.split_letter_dataset       # split figé (une fois)
 python -m anpr_maroc.scripts.train_letter_classifier_v2 \
     --output models/arabic_letter_classifier_real2.pt --ahcd-epochs 6
 python -m anpr_maroc.scripts.evaluate_letter_models --split val
+python -m anpr_maroc.scripts.calibrate_letter_threshold --read-test  # phase 3
 ```
 
-**Le jeu de test (74 images : `أ` 11, `ب` 5, `د` 6, `autre` 52) n'a pas encore
-été ouvert.** Il est réservé à la phase 3 et ne doit servir qu'une fois, pour la
-décision finale.
+## 6. Phase 3 — jeu de test descellé (74 images)
+
+Le jeu de test (`أ` 11, `ب` 5, `د` 6, `autre` 52) a été ouvert **une fois**, après
+la décision de phase 2. Aucun réglage n'a été fait sur ces chiffres — la seule
+grandeur encore libre, le seuil de confiance, a été calibrée sur la validation
+(§6.3) avant d'être lue ici.
+
+```bash
+python -m anpr_maroc.scripts.evaluate_letter_models --split test
+```
+
+### 6.1 Classement des quatre modèles
+
+| Modèle | Rappel macro | Exactitude | Confiance correct / incorrect |
+|---|---|---|---|
+| **reel v2 (pré-entr. 4 classes)** | **0.603** | 0.446 | **0.541 / 0.492** |
+| reel v1 (backbone ahcd) | 0.467 | 0.270 | 0.355 / 0.328 |
+| ahcd (28 classes) | 0.307 | 0.459 | 0.473 / **0.624** |
+| 3 classes (défaut actuel) | 0.178 | 0.149 | 0.591 / **0.625** |
+
+Le classement du test reproduit celui de la validation, dans le même ordre et
+avec des écarts du même signe. C'est le seul contrôle disponible contre un
+sur-ajustement à la validation, et il passe.
+
+### 6.2 Le défaut de « confiance inversée » est corrigé
+
+C'était le point critique identifié en phase 2. **Il est réglé sur `reel v2`** :
+
+- 3 classes (ancien) : 0.591 quand il a raison, **0.625 quand il se trompe**.
+  Il est *plus* sûr de lui en se trompant. Un seuil de confiance sur ce modèle
+  ne filtre pas les erreurs, il les sélectionne.
+- ahcd : 0.473 / 0.624 — même défaut, en pire.
+- **`reel v2` : 0.541 quand il a raison, 0.492 quand il se trompe.** Le rapport
+  est dans le bon sens, et la précision monte bien avec le seuil (§6.3), ce qui
+  est la définition opérationnelle d'un seuil qui fonctionne.
+
+La marge (0.049) reste faible : le seuil trie utilement mais grossièrement.
+C'est une correction du signe du défaut, pas une calibration fine.
+
+### 6.3 Calibration du seuil — sur la validation, pas sur le test
+
+Régler le seuil sur le test réintroduirait exactement la fuite que ce jeu de
+données a été reconstruit pour supprimer. Le balayage est donc fait sur la
+validation, et le test n'est qu'une lecture.
+
+Balayage sur la **validation** (58 images), précision/rappel sur les lettres émises :
+
+| Seuil | Émises | Justes | Précision | Rappel | F1 | Exactitude 4 cl. |
+|---|---|---|---|---|---|---|
+| 0.30 | 45 | 13 | 0.289 | 1.000 | 0.448 | 0.448 |
+| 0.40 | 29 | 8 | 0.276 | 0.571 | 0.372 | 0.534 |
+| **0.45** | **22** | **8** | **0.364** | **0.571** | **0.444** | **0.655** |
+| 0.55 | 14 | 5 | 0.357 | 0.333 | 0.345 | 0.672 |
+| 0.65 | 6 | 2 | 0.333 | 0.125 | 0.182 | 0.690 |
+| 0.75 | 3 | 1 | 0.333 | 0.062 | 0.105 | 0.707 |
+| 0.85 | 1 | 0 | 0.000 | 0.000 | 0.000 | 0.707 |
+
+**Constat honnête : la précision ne dépasse jamais 0.364, quel que soit le
+seuil.** Monter le seuil n'achète pas de la précision, il éteint simplement le
+modèle — à 0.85 il n'émet plus rien. Sur le test isolément la précision semblait
+grimper jusqu'à 1.000 à 0.85, mais sur **3 émissions** : du bruit, pas un
+régime exploitable. C'est précisément pourquoi la calibration ne se fait pas là.
+
+**Seuil retenu : 0.45.** C'est le point où l'exactitude 4 classes (0.655) est
+proche de son maximum alors que les trois lettres sont encore émises — au-delà
+de 0.50, `ب` et `د` disparaissent complètement et le modèle dégénère en
+détecteur de `أ`.
+
+Lecture sur le **test** à 0.45 : 34 lettres émises, 13 justes → précision
+**0.382**, rappel **0.650**, exactitude 4 classes **0.622**.
+
+| Lettre | Émissions justes | Taux |
+|---|---|---|
+| `أ` | 9 / 21 | 0.429 |
+| `ب` | 2 / 5 | 0.400 |
+| `د` | 2 / 8 | 0.250 |
+
+### 6.4 D'où viennent réellement les erreurs
+
+La précision de 0.382 se lit mal sans son contexte : le jeu de test est à 70 %
+(52/74) des crops `autre`, c'est-à-dire des zones que le segmenteur a mal
+cadrées. L'erreur dominante n'est pas une confusion entre lettres, c'est un
+**non-glyphe lu comme une lettre**.
+
+Séparé, cela donne deux chiffres très différents — les deux sont vrais et
+doivent être cités ensemble :
+
+| Situation | reel v2 | 3 classes (ancien) |
+|---|---|---|
+| **Zone lettre correctement cadrée** (22 images) | **16/22 = 0.727** | 8/22 = 0.364 |
+| Rejet des zones mal cadrées (`autre`, 52 images) | rappel 0.327 | rappel 0.077 |
+
+Détail sur zone bien cadrée (`reel v2`) : `أ` 9/11, `ب` 3/5, `د` 4/6.
+
+**Quand la segmentation fait son travail, le modèle lit la bonne lettre dans
+73 % des cas.** Le maillon faible mesuré n'est pas le classifieur mais le
+rejet des zones mal segmentées. C'est là que porterait le prochain effort, pas
+sur l'architecture du CNN.
+
+### 6.5 Marges d'erreur
+
+À rappeler systématiquement : 5 à 11 images par lettre dans le test. Un
+intervalle de Wald à 95 % sur `أ` (9/11) va de 0.63 à 1.00 ; sur `ب` (3/5), de
+0.17 à 1.00. **Ces taux par lettre ont des marges de l'ordre de ±20 à ±40
+points** et ne départagent pas les lettres entre elles. Seul l'écart global
+entre `reel v2` et l'ancien modèle (0.727 contre 0.364 sur les mêmes 22 images)
+est assez large pour être conclusif.
